@@ -3,8 +3,8 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import GameContainer from './components/GameContainer';
 import HandTracker from './components/HandTracker';
 import HUD from './components/HUD';
-import VeoAnimator from './components/VeoAnimator';
-import { HandState, MovementGesture, CombatGesture, GameState } from './types';
+import CinematicGenerator from './components/CinematicGenerator';
+import { HandState, MovementGesture, CombatGesture, GameState, GameStatus } from './types';
 
 const App: React.FC = () => {
   const [handState, setHandState] = useState<HandState>({
@@ -14,17 +14,19 @@ const App: React.FC = () => {
     rightHandPresent: false,
   });
 
+  // Added isGameOver to initial state to satisfy GameState interface
   const [gameState, setGameState] = useState<GameState>({
     ammo: 10,
     score: 0,
     health: 100,
-    isGameOver: false,
+    status: GameStatus.MENU,
     isReloading: false,
     lastDamageTime: 0,
+    isGameOver: false,
   });
 
   const [error, setError] = useState<string | null>(null);
-  const [isVeoOpen, setIsVeoOpen] = useState(false);
+  const [isCinematicOpen, setIsCinematicOpen] = useState(false);
   const stepCount = useRef(0);
 
   const HAPTIC_PATTERNS = {
@@ -72,27 +74,34 @@ const App: React.FC = () => {
 
   const handleTakeDamage = useCallback((amount: number) => {
     setGameState(prev => {
-      if (prev.health <= 0) return prev;
+      if (prev.health <= 0 || prev.status !== GameStatus.PLAYING) return prev;
       triggerHaptic(HAPTIC_PATTERNS.DAMAGE_CRITICAL);
       const newHealth = Math.max(0, prev.health - amount);
+      const isDead = newHealth <= 0;
       return { 
         ...prev, 
         health: newHealth, 
         lastDamageTime: Date.now(),
-        isGameOver: newHealth <= 0
+        status: isDead ? GameStatus.GAMEOVER : prev.status,
+        isGameOver: isDead
       };
     });
   }, []);
 
+  // Update startGame to reset isGameOver to false
+  const startGame = () => {
+    setGameState(prev => ({ ...prev, status: GameStatus.PLAYING, health: 100, ammo: 10, score: 0, isGameOver: false }));
+  };
+
   useEffect(() => {
-    if (handState.combat === CombatGesture.RELOAD) {
+    if (handState.combat === CombatGesture.RELOAD && gameState.status === GameStatus.PLAYING) {
       handleReload();
     }
-  }, [handState.combat, handleReload]);
+  }, [handState.combat, handleReload, gameState.status]);
 
   useEffect(() => {
     let interval: number;
-    if (handState.movement !== MovementGesture.STOP && !gameState.isGameOver && !isVeoOpen) {
+    if (handState.movement !== MovementGesture.STOP && gameState.status === GameStatus.PLAYING && !isCinematicOpen) {
       interval = window.setInterval(() => {
         stepCount.current++;
         const stepCycle = stepCount.current % 16;
@@ -101,11 +110,15 @@ const App: React.FC = () => {
       }, 450);
     }
     return () => clearInterval(interval);
-  }, [handState.movement, gameState.isGameOver, isVeoOpen]);
+  }, [handState.movement, gameState.status, isCinematicOpen]);
+
+  const isGameOver = gameState.status === GameStatus.GAMEOVER;
+  const isMenu = gameState.status === GameStatus.MENU;
+  const isPlaying = gameState.status === GameStatus.PLAYING;
 
   return (
     <div className="relative w-full h-screen bg-neutral-900 overflow-hidden font-sans">
-      {/* 3D Game World */}
+      {/* Mundo do Jogo 3D - Fixed type error by passing the updated gameState directly */}
       <GameContainer 
         handState={handState} 
         gameState={gameState}
@@ -114,84 +127,110 @@ const App: React.FC = () => {
         onTakeDamage={handleTakeDamage}
       />
 
-      {/* Veo Cinematic Generator Button */}
-      <button 
-        onClick={() => setIsVeoOpen(true)}
-        className="absolute top-4 right-4 z-[60] bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2 rounded-full font-bold flex items-center gap-2 shadow-lg transition-all border border-white/20 active:scale-95"
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="17" x2="22" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line></svg>
-        CINEMATIC GEN
-      </button>
+      {/* Botão Gerador Cinemático */}
+      {isPlaying && (
+        <button 
+          onClick={() => setIsCinematicOpen(true)}
+          className="absolute top-4 right-4 z-[60] bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2 rounded-full font-bold flex items-center gap-2 shadow-lg transition-all border border-white/20 active:scale-95"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="17" x2="22" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line></svg>
+          GERAR CINEMÁTICA
+        </button>
+      )}
 
-      {/* Veo Modal */}
-      {isVeoOpen && <VeoAnimator onClose={() => setIsVeoOpen(false)} />}
+      {/* Modal Cinemático */}
+      {isCinematicOpen && <CinematicGenerator onClose={() => setIsCinematicOpen(false)} />}
 
-      {/* Hand Tracking Overlay & Camera Feed */}
+      {/* Overlay de Rastreamento de Mão */}
       <div className="absolute bottom-4 right-4 w-64 h-48 border-2 border-white/20 rounded-lg overflow-hidden bg-black/50 shadow-2xl z-50">
         <HandTracker onUpdate={handleHandUpdate} onError={setError} />
       </div>
 
-      {/* Camera Error Modal */}
+      {/* Erro de Câmera */}
       {error && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/90 z-[110] p-6 text-center">
+        <div className="absolute inset-0 flex items-center justify-center bg-black/95 z-[110] p-6 text-center">
           <div className="max-w-md">
-            <h2 className="text-2xl font-bold text-red-500 mb-4">Camera Error</h2>
+            <h2 className="text-2xl font-bold text-red-500 mb-4">Erro de Hardware</h2>
             <p className="text-white/80 mb-6">{error}</p>
-            <p className="text-sm text-white/40 mb-6">This prototype requires a webcam for gesture control. Please ensure your camera is connected and permissions are granted.</p>
             <button 
               onClick={() => window.location.reload()}
               className="px-6 py-2 bg-red-600 text-white font-bold rounded uppercase hover:bg-red-700 transition-colors"
             >
-              Retry
+              Tentar Novamente
             </button>
           </div>
         </div>
       )}
 
-      {/* Damage Overlay */}
-      {Date.now() - gameState.lastDamageTime < 300 && (
-        <div className="absolute inset-0 pointer-events-none bg-red-600/20 z-40 animate-pulse border-[20px] border-red-900/40" />
-      )}
+      {/* Menu Inicial */}
+      {isMenu && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/80 backdrop-blur-2xl z-[100] animate-in fade-in zoom-in duration-700">
+           <div className="text-center max-w-2xl px-8">
+             <div className="mb-2 text-cyan-400 font-bold tracking-[0.5em] uppercase text-xs">Simulação Neural Ativa</div>
+             <h1 className="text-8xl font-black text-white italic tracking-tighter mb-8 leading-none">GESTURE<br/><span className="text-cyan-500">STRIKE</span></h1>
+             
+             <div className="grid grid-cols-2 gap-8 mb-12 text-left">
+                <div className="border-l-2 border-white/20 pl-4">
+                  <h3 className="text-white font-bold text-sm mb-2 uppercase tracking-widest">Movimentação (✋)</h3>
+                  <p className="text-white/40 text-xs leading-relaxed">Posicione sua mão esquerda para navegar. Feche o punho (👊) para parar.</p>
+                </div>
+                <div className="border-l-2 border-white/20 pl-4">
+                  <h3 className="text-white font-bold text-sm mb-2 uppercase tracking-widest">Combate (👉)</h3>
+                  <p className="text-white/40 text-xs leading-relaxed">Use a mão direita para mirar. Dobre o indicador para disparar.</p>
+                </div>
+             </div>
 
-      {/* Game Over Screen */}
-      {gameState.isGameOver && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/80 backdrop-blur-xl z-[100] animate-in fade-in duration-500">
-           <div className="text-center">
-             <h1 className="text-8xl font-black text-red-600 italic tracking-tighter mb-4">Wasted</h1>
-             <p className="text-white/60 mb-8">Score: {gameState.score}</p>
              <button 
-              onClick={() => window.location.reload()}
-              className="px-8 py-4 bg-white text-black font-bold uppercase hover:bg-red-600 hover:text-white transition-all transform hover:scale-110"
+              onClick={startGame}
+              className="group relative px-12 py-5 bg-white text-black font-black uppercase tracking-widest hover:bg-cyan-500 hover:text-white transition-all transform hover:scale-105 active:scale-95"
              >
-               Respawn
+               <span className="relative z-10">Iniciar Link Neural</span>
+               <div className="absolute inset-0 bg-cyan-400 scale-x-0 group-hover:scale-x-100 transition-transform origin-left" />
              </button>
            </div>
         </div>
       )}
 
-      {/* Movement & Combat Zones Visualization */}
-      <div className="absolute inset-0 pointer-events-none flex">
-        <div className={`w-1/2 h-full border-r border-white/10 flex items-center justify-center transition-colors duration-300 ${handState.leftHandPresent ? 'bg-blue-500/5' : ''}`}>
-           <span className="text-white/20 uppercase tracking-widest font-black text-4xl">Movement</span>
+      {/* Tela de Game Over */}
+      {isGameOver && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/90 backdrop-blur-xl z-[100] animate-in fade-in duration-500">
+           <div className="text-center">
+             <h1 className="text-8xl font-black text-red-600 italic tracking-tighter mb-4 animate-pulse">DESATIVADO</h1>
+             <p className="text-white/40 mb-8 uppercase tracking-[0.3em]">Pontuação Final: {gameState.score}</p>
+             <button 
+              onClick={startGame}
+              className="px-8 py-4 bg-white text-black font-bold uppercase tracking-widest hover:bg-red-600 hover:text-white transition-all transform hover:scale-110"
+             >
+               Reiniciar Sistema
+             </button>
+           </div>
         </div>
-        <div className={`w-1/2 h-full flex items-center justify-center transition-colors duration-300 ${handState.rightHandPresent ? 'bg-red-500/5' : ''}`}>
-           <span className="text-white/20 uppercase tracking-widest font-black text-4xl">Combat</span>
+      )}
+
+      {/* Visualização de Zonas */}
+      {isPlaying && (
+        <div className="absolute inset-0 pointer-events-none flex">
+          <div className={`w-1/2 h-full border-r border-white/5 flex items-center justify-center transition-colors duration-500 ${handState.leftHandPresent ? 'bg-blue-500/[0.02]' : ''}`}>
+             <span className="text-white/5 uppercase tracking-[1em] font-black text-2xl rotate-90">Navegação</span>
+          </div>
+          <div className={`w-1/2 h-full flex items-center justify-center transition-colors duration-500 ${handState.rightHandPresent ? 'bg-red-500/[0.02]' : ''}`}>
+             <span className="text-white/5 uppercase tracking-[1em] font-black text-2xl -rotate-90">Armamento</span>
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* HUD UI */}
-      <HUD gameState={gameState} handState={handState} />
+      {/* HUD e Elementos Visuais */}
+      {isPlaying && <HUD gameState={gameState} handState={handState} />}
+      
+      {isPlaying && Date.now() - gameState.lastDamageTime < 300 && (
+        <div className="absolute inset-0 pointer-events-none bg-red-600/20 z-40 animate-pulse border-[20px] border-red-900/40" />
+      )}
 
-      {/* Credits */}
+      {/* Rodapé de Créditos */}
       <div className="absolute top-4 left-4 z-50">
-        <div className="bg-black/40 backdrop-blur-sm px-3 py-1 border border-white/10 rounded text-[10px] font-bold text-white/60 tracking-widest uppercase">
-          Projeto Criado por Matheus Siqueira
+        <div className="bg-black/40 backdrop-blur-sm px-3 py-1 border border-white/10 rounded text-[10px] font-bold text-white/40 tracking-widest uppercase">
+          Matheus Siqueira // Protótipo v1.0
         </div>
-      </div>
-
-      {/* Startup Overlay */}
-      <div className="absolute top-8 left-1/2 -translate-x-1/2 bg-black/60 px-6 py-2 rounded-full border border-white/20 text-xs text-white/80 backdrop-blur-md z-40">
-        GESTURE CONTROLS: LEFT HAND = MOVE (✋/👊) | RIGHT HAND = GUN (👉) + TRIGGER (👆)
       </div>
     </div>
   );

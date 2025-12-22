@@ -23,6 +23,12 @@ export enum EnemyAIState {
   DEAD = 'DEAD'
 }
 
+export enum GameStatus {
+  MENU = 'MENU',
+  PLAYING = 'PLAYING',
+  GAMEOVER = 'GAMEOVER'
+}
+
 export interface HandState {
   movement: MovementGesture;
   combat: CombatGesture;
@@ -34,9 +40,10 @@ export interface GameState {
   ammo: number;
   score: number;
   health: number;
-  isGameOver: boolean;
+  status: GameStatus;
   isReloading: boolean;
   lastDamageTime: number;
+  isGameOver: boolean;
 }
 
 export interface Target {
