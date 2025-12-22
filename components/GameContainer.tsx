@@ -1,13 +1,11 @@
 
-import React, { Suspense, useRef, useState, useEffect } from 'react';
+import React, { Suspense, useRef, useState, useEffect, useMemo } from 'react';
 import { Canvas, useFrame, useThree, ThreeElements } from '@react-three/fiber';
 import { Sky, Stars, Environment, PerspectiveCamera, Box, Sphere } from '@react-three/drei';
 import * as THREE from 'three';
 import { HandState, MovementGesture, CombatGesture, GameState, Target, EnemyAIState } from '../types';
 
 // Extend the JSX namespace to include Three.js elements used by React Three Fiber
-// This fixes the 'Property ... does not exist on type JSX.IntrinsicElements' errors
-// by ensuring both global JSX and React.JSX namespaces are extended.
 declare global {
   namespace JSX {
     interface IntrinsicElements extends ThreeElements {}
@@ -26,6 +24,44 @@ interface GameContainerProps {
   onScore: (points: number) => void;
   onTakeDamage: (amount: number) => void;
 }
+
+/**
+ * Visualizes the path an enemy is currently following.
+ * Renders a holographic dashed line on the ground.
+ */
+const PatrolPath: React.FC<{ start: [number, number, number]; end: [number, number, number] }> = ({ start, end }) => {
+  const lineRef = useRef<THREE.Line>(null);
+
+  const points = useMemo(() => {
+    return [
+      new THREE.Vector3(start[0], 0.1, start[2]),
+      new THREE.Vector3(end[0], 0.1, end[2])
+    ];
+  }, [start, end]);
+
+  useEffect(() => {
+    if (lineRef.current) {
+      lineRef.current.geometry.setFromPoints(points);
+      lineRef.current.computeLineDistances();
+    }
+  }, [points]);
+
+  return (
+    // FIX: Cast ref to any to avoid type collision with the standard SVG <line> element's ref type (SVGLineElement).
+    // In React Three Fiber, <line> maps to THREE.Line, but TypeScript's default JSX types often favor standard DOM/SVG elements.
+    <line ref={lineRef as any}>
+      <bufferGeometry />
+      <lineDashedMaterial 
+        color="#00ff88" 
+        dashSize={0.5} 
+        gapSize={0.3} 
+        transparent 
+        opacity={0.4} 
+        depthWrite={false}
+      />
+    </line>
+  );
+};
 
 const EnemyAIComponent: React.FC<{ 
   target: Target; 
@@ -65,7 +101,6 @@ const EnemyAIComponent: React.FC<{
   });
 
   return (
-    // FIX: group, mesh, geometries, and materials are intrinsic elements provided via ThreeElements extension
     <group ref={meshRef} position={target.position} userData={{ isTarget: true, id: target.id }}>
       {/* Drone Body */}
       <mesh castShadow>
@@ -83,29 +118,6 @@ const EnemyAIComponent: React.FC<{
         <meshStandardMaterial color="#00ff00" emissive="#00ff00" emissiveIntensity={2} />
       </mesh>
     </group>
-  );
-};
-
-const Projectile: React.FC<{ start: THREE.Vector3; end: THREE.Vector3; color: string }> = ({ start, end, color }) => {
-  const ref = useRef<THREE.Mesh>(null);
-  const [active, setActive] = useState(true);
-
-  useEffect(() => {
-    const timer = setTimeout(() => setActive(false), 200);
-    return () => clearTimeout(timer);
-  }, []);
-
-  if (!active) return null;
-
-  const distance = start.distanceTo(end);
-  const midPoint = new THREE.Vector3().lerpVectors(start, end, 0.5);
-
-  return (
-    // FIX: mesh and boxGeometry intrinsic elements
-    <mesh position={midPoint}>
-      <boxGeometry args={[0.05, 0.05, distance]} />
-      <meshBasicMaterial color={color} />
-    </mesh>
   );
 };
 
@@ -133,7 +145,6 @@ const Weapon: React.FC<{ combat: CombatGesture; isReloading: boolean }> = ({ com
   });
 
   return (
-    // FIX: group, mesh, boxGeometry, and cylinderGeometry intrinsic elements
     <group ref={meshRef}>
       <mesh position={[0, 0, 0]}>
         <boxGeometry args={[0.15, 0.25, 0.6]} />
@@ -270,24 +281,27 @@ const GameLogic: React.FC<GameContainerProps> = ({ handState, gameState, onShoot
       )}
       
       {enemies.map(e => (
-        <EnemyAIComponent 
-          key={e.id} 
-          target={e} 
-          onHit={() => {}} 
-          onEnemyShoot={() => onTakeDamage(10)} 
-        />
+        <React.Fragment key={e.id}>
+          <EnemyAIComponent 
+            target={e} 
+            onHit={() => {}} 
+            onEnemyShoot={() => onTakeDamage(10)} 
+          />
+          {/* Path Visualization: Only shown when patrolling */}
+          {e.state === EnemyAIState.PATROLLING && (
+            <PatrolPath start={e.position} end={e.targetPoint} />
+          )}
+        </React.Fragment>
       ))}
 
       {/* Environment */}
       <Sky sunPosition={[100, 20, 100]} />
       <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
       <Environment preset="night" />
-      {/* FIX: ambientLight and pointLight intrinsic elements */}
       <ambientLight intensity={0.2} />
       <pointLight position={[10, 10, 10]} intensity={1} color="#4444ff" />
 
       {/* Grid Floor */}
-      {/* FIX: mesh, planeGeometry, and gridHelper intrinsic elements */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow>
         <planeGeometry args={[200, 200]} />
         <meshStandardMaterial color="#0a0a0a" roughness={1} metalness={0} />
