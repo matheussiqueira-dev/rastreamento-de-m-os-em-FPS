@@ -1,0 +1,7 @@
+{
+  "name": "GestureStrike FPS Prototype",
+  "description": "A browser-based FPS prototype controlled entirely by hand gestures using MediaPipe and React Three Fiber.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
