@@ -34,7 +34,7 @@ const createBaseStats = (): MatchStats => ({
   sessionEndedAt: null,
 });
 
-const createInitialState = (difficulty: DifficultyLevel = 'TACTICAL'): GameState => ({
+const createInitialState = (difficulty: DifficultyLevel = 'EASY'): GameState => ({
   ammo: BASE_AMMO,
   maxAmmo: BASE_AMMO,
   score: 0,
@@ -171,7 +171,7 @@ interface UXToast {
 }
 
 const isDifficultyLevel = (value: unknown): value is DifficultyLevel =>
-  value === 'CASUAL' || value === 'TACTICAL' || value === 'INSANE';
+  value === 'EASY' || value === 'CASUAL' || value === 'TACTICAL' || value === 'INSANE';
 
 const isTrackerCalibration = (value: unknown): value is TrackerCalibration => {
   if (!value || typeof value !== 'object') return false;
@@ -191,7 +191,7 @@ const isTrackerCalibration = (value: unknown): value is TrackerCalibration => {
 const App: React.FC = () => {
   const [selectedDifficulty, setSelectedDifficulty] = usePersistentState<DifficultyLevel>(
     STORAGE_KEYS.difficulty,
-    'TACTICAL',
+    'EASY',
     { validate: isDifficultyLevel },
   );
   const [gameState, dispatch] = useReducer(gameReducer, createInitialState(selectedDifficulty));

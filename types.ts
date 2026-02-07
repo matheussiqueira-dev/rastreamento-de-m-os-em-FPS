@@ -30,7 +30,7 @@ export enum GameStatus {
   GAMEOVER = 'GAMEOVER',
 }
 
-export type DifficultyLevel = 'CASUAL' | 'TACTICAL' | 'INSANE';
+export type DifficultyLevel = 'EASY' | 'CASUAL' | 'TACTICAL' | 'INSANE';
 
 export interface DifficultyProfile {
   level: DifficultyLevel;

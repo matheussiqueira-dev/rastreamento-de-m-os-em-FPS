@@ -26,6 +26,17 @@ export const DEFAULT_TRACKER_CALIBRATION: TrackerCalibration = {
 };
 
 export const DIFFICULTY_PROFILES: Record<DifficultyLevel, DifficultyProfile> = {
+  EASY: {
+    level: 'EASY',
+    label: 'Muito Fácil',
+    description: 'Modo treino: inimigos lentos, dano mínimo, tempo para aprender os gestos.',
+    spawnIntervalMs: 8000,
+    maxEnemies: 2,
+    enemyDamage: 3,
+    enemySpeedScale: 0.4,
+    enemyAttackCooldownMs: 5000,
+    scoreMultiplier: 0.5,
+  },
   CASUAL: {
     level: 'CASUAL',
     label: 'Casual',
