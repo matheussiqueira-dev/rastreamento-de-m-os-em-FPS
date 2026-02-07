@@ -1,24 +1,52 @@
 
 import React, { useRef, useEffect, useState } from 'react';
-import { HandState, MovementGesture, CombatGesture } from '../types';
+import { HandState, MovementGesture, CombatGesture, TrackerCalibration } from '../types';
+import { DEFAULT_HAND_STATE } from '../config/gameConfig';
 
 interface HandTrackerProps {
   onUpdate: (state: HandState) => void;
   onError?: (message: string) => void;
+  calibration: TrackerCalibration;
+  isPaused: boolean;
 }
 
-const HandTracker: React.FC<HandTrackerProps> = ({ onUpdate, onError }) => {
+const statesEqual = (a: HandState | null, b: HandState) => {
+  if (!a) return false;
+  return (
+    a.movement === b.movement &&
+    a.combat === b.combat &&
+    a.leftHandPresent === b.leftHandPresent &&
+    a.rightHandPresent === b.rightHandPresent
+  );
+};
+
+const HandTracker: React.FC<HandTrackerProps> = ({ onUpdate, onError, calibration, isPaused }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const lastStateRef = useRef<HandState | null>(null);
+  const calibrationRef = useRef<TrackerCalibration>(calibration);
+  const isPausedRef = useRef(isPaused);
+  const stableStateRef = useRef<HandState | null>(null);
+  const candidateStateRef = useRef<HandState | null>(null);
+  const candidateFramesRef = useRef(0);
   const [cameraActive, setCameraActive] = useState(false);
   const streamRef = useRef<MediaStream | null>(null);
 
   useEffect(() => {
-    if (!videoRef.current || !canvasRef.current) return;
+    calibrationRef.current = calibration;
+  }, [calibration]);
 
-    // Use any casting for window to access MediaPipe global variables
-    const hands = new (window as any).Hands({
+  useEffect(() => {
+    isPausedRef.current = isPaused;
+  }, [isPaused]);
+
+  useEffect(() => {
+    if (!videoRef.current || !canvasRef.current) return;
+    if (!window.Hands) {
+      onError?.('MediaPipe Hands não foi carregado. Verifique o script no index.html.');
+      return;
+    }
+
+    const hands = new window.Hands({
       locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
     });
 
@@ -31,28 +59,21 @@ const HandTracker: React.FC<HandTrackerProps> = ({ onUpdate, onError }) => {
 
     const onResults = (results: any) => {
       if (!canvasRef.current) return;
-      const ctx = canvasRef.current.getContext('2d')!;
+      const ctx = canvasRef.current.getContext('2d');
+      if (!ctx) return;
       ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
       ctx.drawImage(results.image, 0, 0, canvasRef.current.width, canvasRef.current.height);
 
-      let newState: HandState = {
-        movement: MovementGesture.STOP,
-        combat: CombatGesture.IDLE,
-        leftHandPresent: false,
-        rightHandPresent: false,
-      };
+      let newState: HandState = { ...DEFAULT_HAND_STATE };
 
       if (results.multiHandLandmarks && results.multiHandedness) {
-        const drawingUtils = window as any;
         results.multiHandLandmarks.forEach((landmarks: any, index: number) => {
-          const handedness = results.multiHandedness[index].label; 
-          const isActuallyLeft = handedness === 'Right'; 
-
-          drawingUtils.drawConnectors(ctx, landmarks, (window as any).HAND_CONNECTIONS, { color: isActuallyLeft ? '#3b82f6' : '#ef4444', lineWidth: 2 });
-          drawingUtils.drawLandmarks(ctx, landmarks, { color: '#ffffff', lineWidth: 1, radius: 2 });
-
+          const handedness = results.multiHandedness[index].label;
+          const strokeColor = handedness === 'Right' ? '#46b5ff' : '#ff8b6c';
+          window.drawConnectors(ctx, landmarks, window.HAND_CONNECTIONS, { color: strokeColor, lineWidth: 2 });
+          window.drawLandmarks(ctx, landmarks, { color: '#f3f6ff', lineWidth: 1, radius: 2 });
           const wrist = landmarks[0];
-          
+
           if (wrist.x < 0.5) {
             newState.leftHandPresent = true;
             newState.movement = detectMovement(landmarks);
@@ -63,16 +84,32 @@ const HandTracker: React.FC<HandTrackerProps> = ({ onUpdate, onError }) => {
         });
       }
 
-      if (JSON.stringify(lastStateRef.current) !== JSON.stringify(newState)) {
+      const previousCandidate = candidateStateRef.current;
+      if (statesEqual(previousCandidate, newState)) {
+        candidateFramesRef.current += 1;
+      } else {
+        candidateStateRef.current = newState;
+        candidateFramesRef.current = 1;
+      }
+
+      const smoothing = Math.max(1, Math.floor(calibrationRef.current.smoothingFrames));
+      if (candidateFramesRef.current >= smoothing && !statesEqual(stableStateRef.current, newState)) {
+        stableStateRef.current = { ...newState };
         onUpdate(newState);
-        lastStateRef.current = newState;
       }
     };
 
     hands.onResults(onResults);
 
     let animationFrameId: number;
+    let isDisposed = false;
+
     const processFrame = async () => {
+      if (isDisposed || isPausedRef.current) {
+        animationFrameId = requestAnimationFrame(processFrame);
+        return;
+      }
+
       if (videoRef.current && videoRef.current.readyState >= 2) {
         await hands.send({ image: videoRef.current });
       }
@@ -81,7 +118,6 @@ const HandTracker: React.FC<HandTrackerProps> = ({ onUpdate, onError }) => {
 
     const initCamera = async () => {
       try {
-        // Try to get a stream with flexible constraints to avoid NotFoundError on some hardware
         const constraints = {
           video: {
             width: { ideal: 640 },
@@ -122,47 +158,58 @@ const HandTracker: React.FC<HandTrackerProps> = ({ onUpdate, onError }) => {
     initCamera();
 
     return () => {
+      isDisposed = true;
       cancelAnimationFrame(animationFrameId);
+      stableStateRef.current = null;
+      candidateStateRef.current = null;
+      candidateFramesRef.current = 0;
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
       }
+      hands.close?.().catch(() => undefined);
     };
   }, [onUpdate, onError]);
 
   const detectMovement = (landmarks: any): MovementGesture => {
+    const trackerConfig = calibrationRef.current;
     const wrist = landmarks[0];
-    const isFist = [8, 12, 16, 20].every(idx => getDistance(landmarks[idx], landmarks[0]) < 0.15);
+    const isFist = [8, 12, 16, 20].every(
+      idx => getDistance(landmarks[idx], landmarks[0]) < trackerConfig.fistStopThreshold,
+    );
     if (isFist) return MovementGesture.STOP;
 
-    const centerX = 0.25;
-    const centerY = 0.5;
-    const threshold = 0.08;
+    const centerX = trackerConfig.movementCenterX;
+    const centerY = trackerConfig.movementCenterY;
+    const threshold = trackerConfig.movementDeadzone;
 
     if (wrist.y < centerY - threshold) return MovementGesture.FORWARD;
     if (wrist.y > centerY + threshold) return MovementGesture.BACKWARD;
-    if (wrist.x < centerX - threshold) return MovementGesture.RIGHT; 
-    if (wrist.x > centerX + threshold) return MovementGesture.LEFT;  
+    if (wrist.x < centerX - threshold) return MovementGesture.RIGHT;
+    if (wrist.x > centerX + threshold) return MovementGesture.LEFT;
 
     return MovementGesture.STOP;
   };
 
   const detectCombat = (landmarks: any): CombatGesture => {
+    const trackerConfig = calibrationRef.current;
     const thumbTip = landmarks[4];
     const indexTip = landmarks[8];
     const indexBase = landmarks[5];
     const middleTip = landmarks[12];
 
-    const indexExtended = getDistance(indexTip, landmarks[0]) > 0.3;
-    const middleExtended = getDistance(middleTip, landmarks[0]) > 0.3;
+    const indexExtended = getDistance(indexTip, landmarks[0]) > trackerConfig.indexExtendedThreshold;
+    const middleExtended = getDistance(middleTip, landmarks[0]) > trackerConfig.indexExtendedThreshold;
     const thumbUp = thumbTip.y < indexBase.y;
     const othersCurled = [16, 20].every(idx => getDistance(landmarks[idx], landmarks[0]) < 0.2);
 
-    const isFullHand = [8, 12, 16, 20].every(idx => getDistance(landmarks[idx], landmarks[0]) > 0.3);
+    const isFullHand = [8, 12, 16, 20].every(
+      idx => getDistance(landmarks[idx], landmarks[0]) > trackerConfig.openHandThreshold,
+    );
     if (isFullHand) return CombatGesture.RELOAD;
 
     if (indexExtended && thumbUp && othersCurled) {
       const indexCurvature = getDistance(indexTip, indexBase);
-      if (indexCurvature < 0.12) return CombatGesture.FIRE;
+      if (indexCurvature < trackerConfig.fireCurlThreshold) return CombatGesture.FIRE;
       if (middleExtended) return CombatGesture.IRON_SIGHT;
       return CombatGesture.AIM;
     }
@@ -177,12 +224,13 @@ const HandTracker: React.FC<HandTrackerProps> = ({ onUpdate, onError }) => {
   return (
     <div className="relative w-full h-full bg-black flex items-center justify-center">
       <video ref={videoRef} className="hidden" playsInline muted />
-      {!cameraActive && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
-          <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-white"></div>
+      {!cameraActive ? (
+        <div className="tracker-loading">
+          <div className="tracker-spinner" />
+          <span>Iniciando câmera...</span>
         </div>
-      )}
-      <canvas ref={canvasRef} className="w-full h-full object-cover scale-x-[-1]" width={640} height={480} />
+      ) : null}
+      <canvas ref={canvasRef} className="tracker-canvas" width={640} height={480} />
     </div>
   );
 };

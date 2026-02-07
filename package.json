@@ -1,13 +1,15 @@
 
 {
   "name": "gesture-strike-fps",
-  "version": "1.0.0",
-  "description": "Protótipo de FPS controlado por gestos manuais via visão computacional.",
-  "main": "index.tsx",
+  "version": "2.0.0",
+  "description": "FPS em navegador controlado por gestos manuais com arquitetura otimizada, UI moderna e telemetria de sessão.",
+  "private": true,
+  "type": "module",
   "scripts": {
-    "start": "serve .",
-    "lint": "eslint . --ext .ts,.tsx",
-    "format": "prettier --write ."
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host",
+    "typecheck": "tsc --noEmit"
   },
   "keywords": [
     "fps",
@@ -19,14 +21,20 @@
   "author": "Matheus Siqueira",
   "license": "MIT",
   "dependencies": {
+    "@google/genai": "^1.40.0",
+    "@react-three/drei": "^10.0.0",
+    "@react-three/fiber": "^9.0.0",
+    "@types/three": "^0.182.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "three": "^0.182.0",
-    "@react-three/fiber": "^9.0.0",
-    "@react-three/drei": "^10.0.0",
-    "@mediapipe/hands": "^0.4.1646424915",
-    "@mediapipe/camera_utils": "^0.3.1640029074",
-    "@mediapipe/drawing_utils": "^0.3.1620248257",
-    "@google/genai": "^0.2.1"
+    "three": "^0.182.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "@types/react": "^19.0.12",
+    "@types/react-dom": "^19.0.5",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "^5.9.2",
+    "vite": "^7.0.5"
   }
 }

@@ -1,6 +1,6 @@
 {
-  "name": "GestureStrike FPS Prototype",
-  "description": "A browser-based FPS prototype controlled entirely by hand gestures using MediaPipe and React Three Fiber.",
+  "name": "GestureStrike FPS v2",
+  "description": "A browser-based FPS controlled by hand gestures with optimized architecture, tactical HUD, calibration and cinematic generation.",
   "requestFramePermissions": [
     "camera"
   ]

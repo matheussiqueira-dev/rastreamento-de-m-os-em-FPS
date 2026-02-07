@@ -1,384 +1,421 @@
-
-import React, { Suspense, useRef, useState, useEffect, useMemo } from 'react';
-import { Canvas, useFrame, useThree, ThreeElements } from '@react-three/fiber';
-import { Sky, Stars, Environment, PerspectiveCamera, Box, Sphere } from '@react-three/drei';
+import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { Environment, PerspectiveCamera, Sky, Stars } from '@react-three/drei';
 import * as THREE from 'three';
-import { HandState, MovementGesture, CombatGesture, GameState, Target, EnemyAIState } from '../types';
-
-// Extend the JSX namespace to include Three.js elements used by React Three Fiber
-declare global {
-  namespace JSX {
-    interface IntrinsicElements extends ThreeElements {}
-  }
-  namespace React {
-    namespace JSX {
-      interface IntrinsicElements extends ThreeElements {}
-    }
-  }
-}
+import {
+  CombatGesture,
+  EnemyAIState,
+  GameState,
+  GameStatus,
+  HandState,
+  MovementGesture,
+  Target,
+} from '../types';
+import { DIFFICULTY_PROFILES, WAVE_ENEMY_STEP } from '../config/gameConfig';
 
 interface GameContainerProps {
   handState: HandState;
   gameState: GameState;
-  onShoot: () => void;
-  onScore: (points: number) => void;
+  isMotionReduced: boolean;
+  onShoot: (didHit: boolean) => void;
+  onEnemyDefeated: (points: number) => void;
   onTakeDamage: (amount: number) => void;
+  onWaveChange: (wave: number) => void;
 }
 
-/**
- * Visualizes the path an enemy is currently following.
- * Renders a holographic dashed line on the ground.
- */
-const PatrolPath: React.FC<{ start: [number, number, number]; end: [number, number, number] }> = ({ start, end }) => {
-  const lineRef = useRef<THREE.Line>(null);
+const WORLD_LIMIT = 95;
+const PLAYER_HEIGHT = 1.6;
+const BASE_MOVE_SPEED = 6;
+const WEAPON_COOLDOWN_MS = 240;
+const ENEMY_SYNC_INTERVAL_SECONDS = 0.1;
 
-  const points = useMemo(() => {
-    return [
-      new THREE.Vector3(start[0], 0.1, start[2]),
-      new THREE.Vector3(end[0], 0.1, end[2])
-    ];
+const clampPosition = (position: THREE.Vector3) => {
+  position.x = THREE.MathUtils.clamp(position.x, -WORLD_LIMIT, WORLD_LIMIT);
+  position.z = THREE.MathUtils.clamp(position.z, -WORLD_LIMIT, WORLD_LIMIT);
+};
+
+const nextEnemyId = () => `enemy-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+
+const toTuple = (vector: THREE.Vector3): [number, number, number] => [vector.x, vector.y, vector.z];
+
+const createEnemy = (cameraPos: THREE.Vector3, wave: number): Target => {
+  const angle = Math.random() * Math.PI * 2;
+  const radius = 28 + Math.random() * 20 + Math.min(15, wave * 1.5);
+  const position = new THREE.Vector3(
+    cameraPos.x + Math.cos(angle) * radius,
+    PLAYER_HEIGHT,
+    cameraPos.z + Math.sin(angle) * radius,
+  );
+  clampPosition(position);
+
+  const targetPoint = new THREE.Vector3(
+    position.x + (Math.random() - 0.5) * 28,
+    PLAYER_HEIGHT,
+    position.z + (Math.random() - 0.5) * 28,
+  );
+  clampPosition(targetPoint);
+
+  return {
+    id: nextEnemyId(),
+    position: toTuple(position),
+    health: 100,
+    state: EnemyAIState.PATROLLING,
+    targetPoint: toTuple(targetPoint),
+    lastActionTime: performance.now(),
+    strafeSeed: Math.random() * Math.PI * 2,
+  };
+};
+
+const renderSafeCopy = (enemy: Target): Target => ({
+  ...enemy,
+  position: [...enemy.position] as [number, number, number],
+  targetPoint: [...enemy.targetPoint] as [number, number, number],
+});
+
+const PatrolPath: React.FC<{ start: [number, number, number]; end: [number, number, number] }> = ({
+  start,
+  end,
+}) => {
+  const { midpoint, quaternion, length } = useMemo(() => {
+    const startPoint = new THREE.Vector3(start[0], 0.16, start[2]);
+    const endPoint = new THREE.Vector3(end[0], 0.16, end[2]);
+    const direction = endPoint.clone().sub(startPoint);
+    const segmentLength = Math.max(0.001, direction.length());
+    const unitDirection = direction.clone().normalize();
+    const unitY = new THREE.Vector3(0, 1, 0);
+    const segmentQuaternion = new THREE.Quaternion().setFromUnitVectors(unitY, unitDirection);
+
+    return {
+      midpoint: startPoint.clone().add(endPoint).multiplyScalar(0.5),
+      quaternion: segmentQuaternion,
+      length: segmentLength,
+    };
   }, [start, end]);
 
-  useEffect(() => {
-    if (lineRef.current) {
-      lineRef.current.geometry.setFromPoints(points);
-      lineRef.current.computeLineDistances();
-    }
-  }, [points]);
-
   return (
-    <line ref={lineRef as any}>
-      <bufferGeometry />
-      <lineDashedMaterial 
-        color="#00ff88" 
-        dashSize={0.5} 
-        gapSize={0.3} 
-        transparent 
-        opacity={0.4} 
-        depthWrite={false}
-      />
-    </line>
+    <mesh position={midpoint} quaternion={quaternion}>
+      <cylinderGeometry args={[0.035, 0.035, length, 10]} />
+      <meshBasicMaterial color="#89e9ff" transparent opacity={0.24} />
+    </mesh>
   );
 };
 
-const EnemyAIComponent: React.FC<{ 
-  target: Target; 
-  onHit: (id: string) => void;
-  onEnemyShoot: () => void;
-}> = ({ target, onHit, onEnemyShoot }) => {
-  const meshRef = useRef<THREE.Group>(null);
+const EnemyDrone: React.FC<{ enemy: Target; isMotionReduced: boolean }> = ({ enemy, isMotionReduced }) => {
+  const groupRef = useRef<THREE.Group>(null);
   const eyeRef = useRef<THREE.Mesh>(null);
-  
-  useFrame((state, delta) => {
-    if (!meshRef.current || target.state === EnemyAIState.DEAD) return;
 
-    // Pulse animation - speed varies by state
-    const pulseFreq = target.state === EnemyAIState.ATTACKING ? 10 : (target.state === EnemyAIState.ALERT ? 5 : 2);
-    meshRef.current.position.y = target.position[1] + Math.sin(state.clock.elapsedTime * pulseFreq) * 0.15;
-    
-    // Rotation logic
-    if (target.state === EnemyAIState.ALERT || target.state === EnemyAIState.ATTACKING) {
-      // Look at player (camera)
-      const lookPos = new THREE.Vector3(state.camera.position.x, meshRef.current.position.y, state.camera.position.z);
-      meshRef.current.lookAt(lookPos);
-      
-      // Update eye color and intensity based on aggression
-      if (eyeRef.current) {
-        const color = target.state === EnemyAIState.ATTACKING ? '#ff0000' : '#ffff00';
-        const intensity = target.state === EnemyAIState.ATTACKING ? 5 : 2;
-        (eyeRef.current.material as THREE.MeshStandardMaterial).color.set(color);
-        (eyeRef.current.material as THREE.MeshStandardMaterial).emissive.set(color);
-        (eyeRef.current.material as THREE.MeshStandardMaterial).emissiveIntensity = intensity + Math.sin(state.clock.elapsedTime * pulseFreq) * 1.5;
-      }
+  useFrame((state) => {
+    if (!groupRef.current || !eyeRef.current || enemy.state === EnemyAIState.DEAD) return;
+
+    const pulseSpeed = enemy.state === EnemyAIState.ATTACKING ? 9 : enemy.state === EnemyAIState.ALERT ? 6 : 2.6;
+    const pulseAmplitude = isMotionReduced ? 0.02 : 0.09;
+    groupRef.current.position.y = enemy.position[1] + Math.sin(state.clock.elapsedTime * pulseSpeed) * pulseAmplitude;
+
+    const eyeMaterial = eyeRef.current.material as THREE.MeshStandardMaterial;
+    if (enemy.state === EnemyAIState.ATTACKING) {
+      eyeMaterial.color.set('#ff4739');
+      eyeMaterial.emissive.set('#ff4739');
+      eyeMaterial.emissiveIntensity = 4;
+    } else if (enemy.state === EnemyAIState.ALERT) {
+      eyeMaterial.color.set('#ffc14d');
+      eyeMaterial.emissive.set('#ffc14d');
+      eyeMaterial.emissiveIntensity = 2.4;
     } else {
-      // Look towards patrol target
-      const lookPos = new THREE.Vector3(target.targetPoint[0], meshRef.current.position.y, target.targetPoint[2]);
-      meshRef.current.lookAt(lookPos);
-      if (eyeRef.current) {
-        (eyeRef.current.material as THREE.MeshStandardMaterial).color.set('#00ff00');
-        (eyeRef.current.material as THREE.MeshStandardMaterial).emissive.set('#00ff00');
-        (eyeRef.current.material as THREE.MeshStandardMaterial).emissiveIntensity = 1.0;
-      }
+      eyeMaterial.color.set('#89e9ff');
+      eyeMaterial.emissive.set('#89e9ff');
+      eyeMaterial.emissiveIntensity = 1.2;
     }
   });
 
   return (
-    <group ref={meshRef} position={target.position} userData={{ isTarget: true, id: target.id }}>
-      {/* Drone Body */}
+    <group ref={groupRef} position={enemy.position} userData={{ targetId: enemy.id }}>
       <mesh castShadow>
-        <octahedronGeometry args={[0.8, 1]} />
-        <meshStandardMaterial color="#1a1a1a" metalness={0.9} roughness={0.1} />
+        <octahedronGeometry args={[0.78, 1]} />
+        <meshStandardMaterial color="#1f2430" metalness={0.92} roughness={0.12} />
       </mesh>
-      {/* Floating Rings */}
       <mesh rotation={[Math.PI / 2, 0, 0]}>
-        <torusGeometry args={[1.2, 0.05, 16, 32]} />
-        <meshStandardMaterial color="#444" emissive="#111" />
+        <torusGeometry args={[1.15, 0.055, 14, 40]} />
+        <meshStandardMaterial color="#2f3747" emissive="#111822" />
       </mesh>
-      {/* Eye Sensor */}
-      <mesh ref={eyeRef} position={[0, 0, 0.6]}>
-        <sphereGeometry args={[0.2, 16, 16]} />
-        <meshStandardMaterial color="#00ff00" emissive="#00ff00" emissiveIntensity={2} />
+      <mesh ref={eyeRef} position={[0, 0, 0.58]}>
+        <sphereGeometry args={[0.19, 16, 16]} />
+        <meshStandardMaterial color="#89e9ff" emissive="#89e9ff" emissiveIntensity={1.6} />
       </mesh>
     </group>
   );
 };
 
 const Weapon: React.FC<{ combat: CombatGesture; isReloading: boolean }> = ({ combat, isReloading }) => {
-  const meshRef = useRef<THREE.Group>(null);
-  
-  useFrame((state) => {
-    if (!meshRef.current) return;
-    
-    const targetPos = new THREE.Vector3(0.5, -0.4, -0.8);
-    if (combat === CombatGesture.IRON_SIGHT) targetPos.set(0, -0.25, -0.5);
-    
-    meshRef.current.position.lerp(targetPos, 0.1);
-    
-    if (combat === CombatGesture.FIRE) {
-      meshRef.current.rotation.x = THREE.MathUtils.lerp(meshRef.current.rotation.x, -0.4, 0.3);
-    } else {
-      meshRef.current.rotation.x = THREE.MathUtils.lerp(meshRef.current.rotation.x, 0, 0.1);
-    }
+  const weaponRef = useRef<THREE.Group>(null);
+
+  useFrame(() => {
+    if (!weaponRef.current) return;
+    const targetPos = new THREE.Vector3(0.53, -0.43, -0.82);
+    if (combat === CombatGesture.IRON_SIGHT) targetPos.set(0.08, -0.25, -0.52);
+    weaponRef.current.position.lerp(targetPos, 0.12);
+
+    const targetRotationX = combat === CombatGesture.FIRE ? -0.42 : 0;
+    weaponRef.current.rotation.x = THREE.MathUtils.lerp(weaponRef.current.rotation.x, targetRotationX, 0.24);
 
     if (isReloading) {
-       meshRef.current.position.y -= 0.1;
-       meshRef.current.rotation.z += 0.2;
+      weaponRef.current.rotation.z = THREE.MathUtils.lerp(weaponRef.current.rotation.z, 0.6, 0.08);
+      weaponRef.current.position.y = THREE.MathUtils.lerp(weaponRef.current.position.y, -0.72, 0.08);
+    } else {
+      weaponRef.current.rotation.z = THREE.MathUtils.lerp(weaponRef.current.rotation.z, 0, 0.1);
     }
   });
 
   return (
-    <group ref={meshRef}>
-      <mesh position={[0, 0, 0]}>
-        <boxGeometry args={[0.15, 0.25, 0.6]} />
-        <meshStandardMaterial color="#111" metalness={1} roughness={0.05} />
+    <group ref={weaponRef}>
+      <mesh>
+        <boxGeometry args={[0.16, 0.25, 0.65]} />
+        <meshStandardMaterial color="#171a20" metalness={1} roughness={0.09} />
       </mesh>
-      <mesh position={[0, 0.1, -0.3]}>
-        <boxGeometry args={[0.1, 0.1, 0.8]} />
-        <meshStandardMaterial color="#050505" />
+      <mesh position={[0, 0.1, -0.35]}>
+        <boxGeometry args={[0.12, 0.1, 0.9]} />
+        <meshStandardMaterial color="#0a0c11" metalness={0.8} roughness={0.3} />
       </mesh>
-      {/* Laser Sight */}
-      <mesh position={[0, 0.15, -0.7]} rotation={[Math.PI/2, 0, 0]}>
-        <cylinderGeometry args={[0.005, 0.005, 15]} />
-        <meshBasicMaterial color="red" transparent opacity={0.4} />
+      <mesh position={[0, 0.155, -0.77]} rotation={[Math.PI / 2, 0, 0]}>
+        <cylinderGeometry args={[0.006, 0.006, 14]} />
+        <meshBasicMaterial color="#ff6f61" transparent opacity={0.35} />
       </mesh>
     </group>
   );
 };
 
-const GameLogic: React.FC<GameContainerProps> = ({ handState, gameState, onShoot, onScore, onTakeDamage }) => {
+const GameLogic: React.FC<GameContainerProps> = ({
+  handState,
+  gameState,
+  onShoot,
+  onEnemyDefeated,
+  onTakeDamage,
+  onWaveChange,
+  isMotionReduced,
+}) => {
   const { camera, raycaster, scene } = useThree();
-  const [enemies, setEnemies] = useState<Target[]>([]);
-  const lastShotTime = useRef(0);
+  const enemiesRef = useRef<Target[]>([]);
+  const [renderEnemies, setRenderEnemies] = useState<Target[]>([]);
+  const spawnClockRef = useRef(0);
+  const syncClockRef = useRef(0);
+  const lastShotTimeRef = useRef(0);
+  const killsRef = useRef(0);
+  const waveRef = useRef(1);
 
-  // AI & Movement Logic
+  const profile = DIFFICULTY_PROFILES[gameState.difficulty];
+
+  useEffect(() => {
+    if (gameState.status === GameStatus.MENU) {
+      enemiesRef.current = [];
+      setRenderEnemies([]);
+      spawnClockRef.current = 0;
+      syncClockRef.current = 0;
+      killsRef.current = 0;
+      waveRef.current = 1;
+      lastShotTimeRef.current = 0;
+      camera.position.set(0, PLAYER_HEIGHT, 7);
+      camera.lookAt(0, PLAYER_HEIGHT, -14);
+    }
+  }, [camera, gameState.status]);
+
+  useEffect(() => {
+    if (gameState.status !== GameStatus.PLAYING) return;
+    if (enemiesRef.current.length > 0) return;
+
+    for (let i = 0; i < 3; i += 1) {
+      enemiesRef.current.push(createEnemy(camera.position.clone(), waveRef.current));
+    }
+    setRenderEnemies(enemiesRef.current.map(renderSafeCopy));
+  }, [camera.position, gameState.status]);
+
   useFrame((state, delta) => {
-    if (gameState.isGameOver) return;
+    if (gameState.status !== GameStatus.PLAYING || gameState.isGameOver) return;
 
-    // Player Movement
-    const moveSpeed = 6 * delta;
-    const direction = new THREE.Vector3();
-    camera.getWorldDirection(direction);
-    direction.y = 0;
-    direction.normalize();
+    const now = performance.now();
+    const playerForward = new THREE.Vector3();
+    camera.getWorldDirection(playerForward);
+    playerForward.y = 0;
+    playerForward.normalize();
 
-    const sideDirection = new THREE.Vector3().crossVectors(direction, new THREE.Vector3(0, 1, 0)).normalize();
+    const playerRight = new THREE.Vector3().crossVectors(playerForward, new THREE.Vector3(0, 1, 0)).normalize();
+    const speedModifier = handState.combat === CombatGesture.IRON_SIGHT ? 0.75 : 1;
+    const moveSpeed = BASE_MOVE_SPEED * delta * speedModifier;
 
-    if (handState.movement === MovementGesture.FORWARD) camera.position.add(direction.multiplyScalar(moveSpeed));
-    if (handState.movement === MovementGesture.BACKWARD) camera.position.add(direction.multiplyScalar(-moveSpeed));
-    if (handState.movement === MovementGesture.LEFT) camera.position.add(sideDirection.multiplyScalar(moveSpeed));
-    if (handState.movement === MovementGesture.RIGHT) camera.position.add(sideDirection.multiplyScalar(-moveSpeed));
+    if (handState.movement === MovementGesture.FORWARD) camera.position.add(playerForward.multiplyScalar(moveSpeed));
+    if (handState.movement === MovementGesture.BACKWARD) camera.position.add(playerForward.multiplyScalar(-moveSpeed));
+    if (handState.movement === MovementGesture.LEFT) camera.position.add(playerRight.multiplyScalar(moveSpeed));
+    if (handState.movement === MovementGesture.RIGHT) camera.position.add(playerRight.multiplyScalar(-moveSpeed));
 
-    // Handle Enemy AI States
-    setEnemies(prev => prev.map(enemy => {
-      const enemyVec = new THREE.Vector3(...enemy.position);
-      const distToPlayer = enemyVec.distanceTo(camera.position);
-      
-      let newState = enemy.state;
-      let newPos = [...enemy.position] as [number, number, number];
-      let newTargetPoint = [...enemy.targetPoint] as [number, number, number];
-      let lastAction = enemy.lastActionTime;
+    camera.position.y = PLAYER_HEIGHT;
+    clampPosition(camera.position);
 
-      // State Transitions
-      if (distToPlayer < 15) newState = EnemyAIState.ATTACKING;
-      else if (distToPlayer < 30) newState = EnemyAIState.ALERT;
-      else newState = EnemyAIState.PATROLLING;
+    spawnClockRef.current += delta * 1000;
+    const spawnInterval = Math.max(1100, profile.spawnIntervalMs - Math.floor((waveRef.current - 1) * 110));
+    const dynamicMaxEnemies = profile.maxEnemies + Math.floor((waveRef.current - 1) / 2);
 
-      const playerPos = new THREE.Vector3(camera.position.x, enemy.position[1], camera.position.z);
+    if (spawnClockRef.current >= spawnInterval && enemiesRef.current.length < dynamicMaxEnemies) {
+      enemiesRef.current.push(createEnemy(camera.position.clone(), waveRef.current));
+      spawnClockRef.current = 0;
+    }
 
-      // Behavior Logic
-      if (newState === EnemyAIState.PATROLLING) {
-        // Slow, wandering patrol
-        const targetVec = new THREE.Vector3(...newTargetPoint);
-        const distToTarget = enemyVec.distanceTo(targetVec);
-        if (distToTarget < 2) {
-           newTargetPoint = [(Math.random() - 0.5) * 80, 1.5, (Math.random() - 0.5) * 80];
+    const playerPosition = new THREE.Vector3(camera.position.x, PLAYER_HEIGHT, camera.position.z);
+    enemiesRef.current = enemiesRef.current.map((enemy) => {
+      if (enemy.state === EnemyAIState.DEAD) return enemy;
+
+      const enemyPosition = new THREE.Vector3(...enemy.position);
+      const targetPoint = new THREE.Vector3(...enemy.targetPoint);
+      const distanceToPlayer = enemyPosition.distanceTo(playerPosition);
+      const attackRange = 11 + Math.min(5, waveRef.current * 0.4);
+      const alertRange = 30 + Math.min(8, waveRef.current * 0.45);
+      const baseSpeed = profile.enemySpeedScale * delta;
+
+      let nextState = enemy.state;
+      if (distanceToPlayer <= attackRange) nextState = EnemyAIState.ATTACKING;
+      else if (distanceToPlayer <= alertRange) nextState = EnemyAIState.ALERT;
+      else nextState = EnemyAIState.PATROLLING;
+
+      if (nextState === EnemyAIState.PATROLLING) {
+        const toTarget = targetPoint.clone().sub(enemyPosition);
+        if (toTarget.length() < 1.5) {
+          const patrolTarget = enemyPosition.clone().add(
+            new THREE.Vector3((Math.random() - 0.5) * 24, 0, (Math.random() - 0.5) * 24),
+          );
+          clampPosition(patrolTarget);
+          enemy.targetPoint = [patrolTarget.x, PLAYER_HEIGHT, patrolTarget.z];
         } else {
-           const moveDir = targetVec.sub(enemyVec).normalize();
-           const patrolSpeed = 2.0 * delta;
-           newPos = [
-             enemy.position[0] + moveDir.x * patrolSpeed,
-             enemy.position[1],
-             enemy.position[2] + moveDir.z * patrolSpeed
-           ];
+          toTarget.normalize();
+          enemyPosition.add(toTarget.multiplyScalar(baseSpeed * 2.2));
         }
-      } else if (newState === EnemyAIState.ALERT) {
-        // Investigating: move quickly towards player position with minor lateral searching
-        const towardsPlayer = playerPos.clone().sub(enemyVec).normalize();
-        const lateralSearch = new THREE.Vector3(0, 1, 0).cross(towardsPlayer).multiplyScalar(Math.sin(state.clock.elapsedTime * 2) * 0.3);
-        const alertMove = towardsPlayer.add(lateralSearch).normalize();
-        const alertSpeed = 4.0 * delta;
-        newPos = [
-          enemy.position[0] + alertMove.x * alertSpeed,
-          enemy.position[1],
-          enemy.position[2] + alertMove.z * alertSpeed
-        ];
-      } else if (newState === EnemyAIState.ATTACKING) {
-        // Tactical combat: strafing and distance maintenance
-        const towardsPlayer = playerPos.clone().sub(enemyVec).normalize();
-        const tangent = new THREE.Vector3(0, 1, 0).cross(towardsPlayer).normalize();
-        
-        // Strafe direction based on time, faster oscillations during attack
-        const strafeDir = Math.sin(state.clock.elapsedTime * 1.5 + Number(enemy.id) % 10) > 0 ? 1 : -1;
-        const combatMoveSpeed = 5.0 * delta;
-        
-        // Strategic distance maintenance (7-11 units)
-        let approachStrength = 0;
-        if (distToPlayer > 11) approachStrength = 1.2;
-        if (distToPlayer < 7) approachStrength = -1.2;
-        
-        const velocity = tangent.multiplyScalar(strafeDir).add(towardsPlayer.multiplyScalar(approachStrength)).normalize();
-        
-        newPos = [
-          enemy.position[0] + velocity.x * combatMoveSpeed,
-          enemy.position[1],
-          enemy.position[2] + velocity.z * combatMoveSpeed
-        ];
+      } else if (nextState === EnemyAIState.ALERT) {
+        const towardPlayer = playerPosition.clone().sub(enemyPosition).normalize();
+        const sideSearch = new THREE.Vector3(0, 1, 0)
+          .cross(towardPlayer)
+          .multiplyScalar(Math.sin(state.clock.elapsedTime * 2 + enemy.strafeSeed) * 0.2);
+        towardPlayer.add(sideSearch).normalize();
+        enemyPosition.add(towardPlayer.multiplyScalar(baseSpeed * 4));
+      } else if (nextState === EnemyAIState.ATTACKING) {
+        const towardPlayer = playerPosition.clone().sub(enemyPosition).normalize();
+        const tangent = new THREE.Vector3(0, 1, 0).cross(towardPlayer).normalize();
+        const strafeDirection = Math.sin(state.clock.elapsedTime * 1.8 + enemy.strafeSeed) > 0 ? 1 : -1;
+        let approachFactor = 0;
+        if (distanceToPlayer > attackRange + 2) approachFactor = 1;
+        if (distanceToPlayer < attackRange - 2) approachFactor = -1;
 
-        // Attack logic: shoot more frequently when attacking
-        if (Date.now() - lastAction > 1800) {
-          onTakeDamage(15);
-          lastAction = Date.now();
+        const velocity = tangent.multiplyScalar(strafeDirection).add(towardPlayer.multiplyScalar(approachFactor));
+        velocity.normalize();
+        enemyPosition.add(velocity.multiplyScalar(baseSpeed * 5.6));
+
+        if (now - enemy.lastActionTime > profile.enemyAttackCooldownMs) {
+          onTakeDamage(profile.enemyDamage);
+          enemy.lastActionTime = now;
         }
       }
 
-      return { ...enemy, state: newState, position: newPos, targetPoint: newTargetPoint, lastActionTime: lastAction };
-    }));
+      clampPosition(enemyPosition);
+      enemy.position = [enemyPosition.x, PLAYER_HEIGHT, enemyPosition.z];
+      enemy.state = nextState;
+      return enemy;
+    });
 
-    // Player Shooting Logic
     if (handState.combat === CombatGesture.FIRE && gameState.ammo > 0 && !gameState.isReloading) {
-      const now = Date.now();
-      if (now - lastShotTime.current > 250) {
-        onShoot();
-        lastShotTime.current = now;
-
+      if (now - lastShotTimeRef.current > WEAPON_COOLDOWN_MS) {
+        lastShotTimeRef.current = now;
         raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
-        const intersects = raycaster.intersectObjects(scene.children, true);
-        const hit = intersects.find(i => {
-          let p = i.object.parent;
-          while(p) {
-            if(p.userData?.isTarget) return true;
-            p = p.parent;
+        const intersections = raycaster.intersectObjects(scene.children, true);
+        let hitEnemyId: string | null = null;
+
+        for (const intersection of intersections) {
+          let object: THREE.Object3D | null = intersection.object;
+          while (object) {
+            if (object.userData?.targetId) {
+              hitEnemyId = object.userData.targetId;
+              break;
+            }
+            object = object.parent;
           }
-          return false;
-        });
-        
-        if (hit) {
-          let p = hit.object.parent;
-          while(p && !p.userData?.isTarget) p = p.parent;
-          const targetId = p?.userData?.id;
-          
-          onScore(500);
-          setEnemies(prev => prev.filter(e => e.id !== targetId));
+          if (hitEnemyId) break;
+        }
+
+        if (hitEnemyId) {
+          enemiesRef.current = enemiesRef.current.filter((enemy) => enemy.id !== hitEnemyId);
+          killsRef.current += 1;
+          const score = Math.round(320 * profile.scoreMultiplier * (1 + (waveRef.current - 1) * 0.18));
+          onEnemyDefeated(score);
+
+          const expectedWave = Math.floor(killsRef.current / WAVE_ENEMY_STEP) + 1;
+          if (expectedWave > waveRef.current) {
+            waveRef.current = expectedWave;
+            onWaveChange(expectedWave);
+          }
+          onShoot(true);
+        } else {
+          onShoot(false);
         }
       }
     }
-  });
 
-  // Spawn Enemies
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (enemies.length < 6 && !gameState.isGameOver) {
-        const id = Math.random().toString();
-        const angle = Math.random() * Math.PI * 2;
-        const radius = 35 + Math.random() * 20;
-        setEnemies(prev => [...prev, {
-          id,
-          position: [Math.cos(angle) * radius, 1.5, Math.sin(angle) * radius],
-          health: 100,
-          state: EnemyAIState.PATROLLING,
-          targetPoint: [(Math.random() - 0.5) * 60, 1.5, (Math.random() - 0.5) * 60],
-          lastActionTime: Date.now()
-        }]);
-      }
-    }, 4000);
-    return () => clearInterval(interval);
-  }, [enemies, gameState.isGameOver]);
+    syncClockRef.current += delta;
+    if (syncClockRef.current >= ENEMY_SYNC_INTERVAL_SECONDS) {
+      syncClockRef.current = 0;
+      setRenderEnemies(enemiesRef.current.map(renderSafeCopy));
+    }
+  });
 
   return (
     <>
-      <PerspectiveCamera makeDefault position={[0, 1.6, 5]} />
-      {!gameState.isGameOver && (
-        <Weapon combat={handState.combat} isReloading={gameState.isReloading} />
-      )}
-      
-      {enemies.map(e => (
-        <React.Fragment key={e.id}>
-          <EnemyAIComponent 
-            target={e} 
-            onHit={() => {}} 
-            onEnemyShoot={() => onTakeDamage(10)} 
-          />
-          {/* Path Visualization: Only shown when patrolling */}
-          {e.state === EnemyAIState.PATROLLING && (
-            <PatrolPath start={e.position} end={e.targetPoint} />
-          )}
+      <PerspectiveCamera makeDefault position={[0, PLAYER_HEIGHT, 7]} />
+      {!gameState.isGameOver && <Weapon combat={handState.combat} isReloading={gameState.isReloading} />}
+
+      {renderEnemies.map((enemy) => (
+        <React.Fragment key={enemy.id}>
+          <EnemyDrone enemy={enemy} isMotionReduced={isMotionReduced} />
+          {enemy.state === EnemyAIState.PATROLLING ? <PatrolPath start={enemy.position} end={enemy.targetPoint} /> : null}
         </React.Fragment>
       ))}
 
-      {/* Environment */}
-      <Sky sunPosition={[100, 20, 100]} />
-      <Stars radius={150} depth={50} count={7000} factor={4} saturation={0} fade speed={2} />
+      <Sky sunPosition={[100, 18, 100]} />
+      <Stars radius={140} depth={42} count={isMotionReduced ? 2600 : 4200} factor={4} saturation={0} fade speed={1.3} />
       <Environment preset="night" />
-      <ambientLight intensity={0.2} />
-      <pointLight position={[10, 10, 10]} intensity={1.5} color="#4444ff" />
 
-      {/* Grid Floor */}
+      <ambientLight intensity={0.42} />
+      <pointLight position={[8, 9, 6]} intensity={1.4} color="#82a7ff" />
+      <spotLight position={[-14, 26, -10]} intensity={1} color="#7ce8ff" angle={0.6} penumbra={0.5} />
+
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow>
-        <planeGeometry args={[300, 300]} />
-        <meshStandardMaterial color="#050505" roughness={1} metalness={0} />
+        <planeGeometry args={[320, 320]} />
+        <meshStandardMaterial color="#0f131b" roughness={1} metalness={0.04} />
       </mesh>
-      <gridHelper args={[300, 150, "#222", "#080808"]} position={[0, 0.01, 0]} />
-      
-      {/* Distant Fog-like geometry */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.5, 0]}>
-        <ringGeometry args={[100, 150, 64]} />
-        <meshBasicMaterial color="#000" />
+      <gridHelper args={[320, 180, '#2b3f5a', '#101822']} position={[0, 0.01, 0]} />
+
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.45, 0]}>
+        <ringGeometry args={[105, 165, 64]} />
+        <meshBasicMaterial color="#05070d" />
       </mesh>
     </>
   );
 };
 
 const GameContainer: React.FC<GameContainerProps> = (props) => {
+  const crosshairStateClass = props.handState.combat === CombatGesture.FIRE
+    ? 'crosshair-fire'
+    : props.handState.combat === CombatGesture.AIM || props.handState.combat === CombatGesture.IRON_SIGHT
+      ? 'crosshair-aim'
+      : 'crosshair-idle';
+
   return (
-    <div className="w-full h-full cursor-none">
-      <Canvas shadows dpr={[1, 2]}>
+    <div className="game-canvas-shell" aria-label="Cena 3D do jogo">
+      <Canvas shadows dpr={[1, 1.8]}>
         <Suspense fallback={null}>
           <GameLogic {...props} />
         </Suspense>
       </Canvas>
-      
-      {/* Crosshair */}
-      {!props.gameState.isGameOver && (
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
-          <div className={`w-12 h-12 border-2 rounded-full flex items-center justify-center transition-all duration-300 ${props.handState.combat === CombatGesture.AIM || props.handState.combat === CombatGesture.IRON_SIGHT ? 'scale-[0.4] border-cyan-400 rotate-45' : 'scale-100 border-white/20'}`}>
-            <div className="w-[2px] h-5 bg-white/50 absolute -top-3" />
-            <div className="w-[2px] h-5 bg-white/50 absolute -bottom-3" />
-            <div className="w-5 h-[2px] bg-white/50 absolute -left-3" />
-            <div className="w-5 h-[2px] bg-white/50 absolute -right-3" />
-            <div className={`w-1.5 h-1.5 bg-white rounded-full transition-transform duration-100 ${props.handState.combat === CombatGesture.FIRE ? 'scale-[6] bg-orange-500 shadow-[0_0_15px_rgba(249,115,22,0.8)]' : ''}`} />
+
+      {!props.gameState.isGameOver ? (
+        <div className="crosshair-root" aria-hidden>
+          <div className={`crosshair-ring ${crosshairStateClass}`}>
+            <span />
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   );
 };

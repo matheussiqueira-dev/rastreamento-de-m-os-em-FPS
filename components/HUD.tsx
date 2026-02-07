@@ -1,83 +1,102 @@
-
 import React from 'react';
-import { GameState, HandState, MovementGesture, CombatGesture } from '../types';
+import { DIFFICULTY_PROFILES } from '../config/gameConfig';
+import { CombatGesture, GameState, HandState } from '../types';
 
 interface HUDProps {
   gameState: GameState;
   handState: HandState;
+  sessionDurationMs: number;
 }
 
-const HUD: React.FC<HUDProps> = ({ gameState, handState }) => {
-  const isLowHealth = gameState.health < 30;
+const formatTime = (milliseconds: number) => {
+  const totalSeconds = Math.floor(milliseconds / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+};
+
+const HUD: React.FC<HUDProps> = ({ gameState, handState, sessionDurationMs }) => {
+  const difficulty = DIFFICULTY_PROFILES[gameState.difficulty];
+  const healthRatio = Math.max(0, Math.min(1, gameState.health / 100));
+  const ammoRatio = Math.max(0, Math.min(1, gameState.ammo / gameState.maxAmmo));
+  const accuracy = gameState.stats.shotsFired > 0
+    ? (gameState.stats.shotsHit / gameState.stats.shotsFired) * 100
+    : 0;
+  const lowHealth = gameState.health <= 28;
 
   return (
-    <div className="absolute inset-0 pointer-events-none flex flex-col justify-between p-8 font-mono">
-      {/* Barra Superior */}
-      <div className="flex justify-between items-start">
-        <div className="bg-black/60 border-l-4 border-cyan-500 p-4 backdrop-blur-md shadow-[0_0_20px_rgba(6,182,212,0.2)]">
-          <div className="text-[10px] text-cyan-400 uppercase tracking-widest mb-1">Logs de Combate // Link Ativo</div>
-          <div className="text-4xl font-black text-white italic">PONTOS: {gameState.score.toLocaleString()}</div>
-        </div>
+    <section className="hud-layer" aria-label="Painel tático">
+      <div className="hud-top-row">
+        <article className="hud-card score-card">
+          <small>Combat Score</small>
+          <strong>{gameState.score.toLocaleString('pt-BR')}</strong>
+          <p>
+            Onda {gameState.wave} • {difficulty.label}
+          </p>
+        </article>
 
-        <div className="flex flex-col items-end gap-2">
-          <div className="flex gap-4">
-             <div className={`p-4 backdrop-blur-md border-b-4 transition-all duration-300 ${handState.leftHandPresent ? 'bg-blue-900/40 border-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.3)]' : 'bg-black/40 border-transparent'}`}>
-               <div className="text-[10px] text-blue-300 uppercase">Matriz de Movimento</div>
-               <div className="text-xl font-bold tracking-tighter">{handState.movement}</div>
-             </div>
-             <div className={`p-4 backdrop-blur-md border-b-4 transition-all duration-300 ${handState.rightHandPresent ? 'bg-red-900/40 border-red-500 shadow-[0_0_15px_rgba(239,68,68,0.3)]' : 'bg-black/40 border-transparent'}`}>
-               <div className="text-[10px] text-red-300 uppercase">Sistema de Armas</div>
-               <div className="text-xl font-bold tracking-tighter">{handState.combat}</div>
-             </div>
+        <article className="hud-card signal-card">
+          <div className="signal-grid">
+            <div className={handState.leftHandPresent ? 'signal-item active-left' : 'signal-item'}>
+              <small>Mão Esquerda</small>
+              <strong>{handState.movement}</strong>
+            </div>
+            <div className={handState.rightHandPresent ? 'signal-item active-right' : 'signal-item'}>
+              <small>Mão Direita</small>
+              <strong>{handState.combat}</strong>
+            </div>
           </div>
-        </div>
+        </article>
       </div>
 
-      {/* Barra Inferior */}
-      <div className="flex justify-between items-end">
-        <div className="flex gap-4 items-end">
-           <div className={`bg-black/60 border-t-4 p-6 backdrop-blur-md min-w-[250px] transition-colors duration-300 ${isLowHealth ? 'border-red-600 animate-pulse' : 'border-green-500'}`}>
-             <div className="flex justify-between items-center mb-2">
-               <div className={`text-xs uppercase ${isLowHealth ? 'text-red-400' : 'text-green-400'}`}>Sinais Vitais {isLowHealth && '// CRÍTICO'}</div>
-               <div className="text-xl font-black text-white">{gameState.health}%</div>
-             </div>
-             <div className="w-full bg-white/10 h-3 rounded-full overflow-hidden">
-               <div 
-                 className={`h-full transition-all duration-500 ${isLowHealth ? 'bg-red-600 shadow-[0_0_10px_rgba(220,38,38,0.8)]' : 'bg-green-500'}`} 
-                 style={{ width: `${gameState.health}%` }} 
-               />
-             </div>
-           </div>
-        </div>
-
-        <div className="bg-black/60 border-r-4 border-red-500 p-6 backdrop-blur-md text-right min-w-[250px]">
-          <div className="text-xs text-red-400 uppercase mb-2 font-bold tracking-widest">Módulos de Munição</div>
-          <div className="flex justify-end gap-1.5 mb-3">
-            {[...Array(10)].map((_, i) => (
-              <div 
-                key={i} 
-                className={`w-2.5 h-8 rounded-sm transition-all duration-300 ${i < gameState.ammo ? 'bg-red-500 shadow-[0_0_15px_rgba(239,68,68,0.6)] scale-y-100' : 'bg-white/5 scale-y-50'}`} 
-              />
-            ))}
+      <div className="hud-bottom-row">
+        <article className={lowHealth ? 'hud-card vitals-card danger' : 'hud-card vitals-card'}>
+          <header>
+            <small>Sinais Vitais</small>
+            <strong>{gameState.health}%</strong>
+          </header>
+          <div className="meter-track">
+            <div className="meter-fill health-fill" style={{ width: `${healthRatio * 100}%` }} />
           </div>
-          <div className="text-4xl font-black text-white italic tracking-tighter">
-            {gameState.isReloading ? (
-              <span className="animate-pulse text-yellow-400 uppercase text-2xl">Ciclando...</span>
-            ) : (
-              `${gameState.ammo} / 10`
-            )}
-          </div>
-        </div>
-      </div>
+          <p>{lowHealth ? 'Estado crítico: evasão imediata recomendada.' : 'Condição estável para avanço.'}</p>
+        </article>
 
-      {/* Info de Haptic / IA Overlay */}
-      <div className="absolute top-1/2 left-8 -translate-y-1/2 flex flex-col gap-1 text-[8px] text-white/20 uppercase tracking-[0.2em]">
-        <div>Link Neural: Estável</div>
-        <div>Haptics: Online</div>
-        <div>Ambiente: Simulado</div>
-        <div>Nível de Ameaça: Crescente</div>
+        <article className="hud-card ammo-card">
+          <header>
+            <small>Munição</small>
+            <strong>{gameState.isReloading ? 'Recarregando...' : `${gameState.ammo}/${gameState.maxAmmo}`}</strong>
+          </header>
+          <div className="meter-track">
+            <div className="meter-fill ammo-fill" style={{ width: `${ammoRatio * 100}%` }} />
+          </div>
+          <p>{gameState.isReloading ? 'Aguarde conclusão do ciclo.' : 'Cadência ativa.'}</p>
+        </article>
+
+        <article className="hud-card metrics-card">
+          <small>Telemetria da Sessão</small>
+          <div className="metric-row">
+            <span>Tempo</span>
+            <strong>{formatTime(sessionDurationMs)}</strong>
+          </div>
+          <div className="metric-row">
+            <span>Precisão</span>
+            <strong>{accuracy.toFixed(1)}%</strong>
+          </div>
+          <div className="metric-row">
+            <span>Abates</span>
+            <strong>{gameState.stats.enemiesDefeated}</strong>
+          </div>
+          <div className="metric-row">
+            <span>Melhor sequência</span>
+            <strong>{gameState.stats.bestStreak}</strong>
+          </div>
+          <div className="metric-row">
+            <span>Estado de mira</span>
+            <strong>{handState.combat === CombatGesture.IRON_SIGHT ? 'Precisão' : 'Padrão'}</strong>
+          </div>
+        </article>
       </div>
-    </div>
+    </section>
   );
 };
 
