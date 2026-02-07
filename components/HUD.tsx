@@ -25,7 +25,7 @@ const HUD: React.FC<HUDProps> = ({ gameState, handState, sessionDurationMs }) =>
   const lowHealth = gameState.health <= 28;
 
   return (
-    <section className="hud-layer" aria-label="Painel tático">
+    <section className="hud-layer" aria-label="Painel tático" aria-live="off">
       <div className="hud-top-row">
         <article className="hud-card score-card">
           <small>Combat Score</small>
@@ -55,7 +55,7 @@ const HUD: React.FC<HUDProps> = ({ gameState, handState, sessionDurationMs }) =>
             <small>Sinais Vitais</small>
             <strong>{gameState.health}%</strong>
           </header>
-          <div className="meter-track">
+          <div className="meter-track" role="progressbar" aria-label="Vida do operador" aria-valuemin={0} aria-valuemax={100} aria-valuenow={gameState.health}>
             <div className="meter-fill health-fill" style={{ width: `${healthRatio * 100}%` }} />
           </div>
           <p>{lowHealth ? 'Estado crítico: evasão imediata recomendada.' : 'Condição estável para avanço.'}</p>
@@ -66,7 +66,14 @@ const HUD: React.FC<HUDProps> = ({ gameState, handState, sessionDurationMs }) =>
             <small>Munição</small>
             <strong>{gameState.isReloading ? 'Recarregando...' : `${gameState.ammo}/${gameState.maxAmmo}`}</strong>
           </header>
-          <div className="meter-track">
+          <div
+            className="meter-track"
+            role="progressbar"
+            aria-label="Munição disponível"
+            aria-valuemin={0}
+            aria-valuemax={gameState.maxAmmo}
+            aria-valuenow={gameState.ammo}
+          >
             <div className="meter-fill ammo-fill" style={{ width: `${ammoRatio * 100}%` }} />
           </div>
           <p>{gameState.isReloading ? 'Aguarde conclusão do ciclo.' : 'Cadência ativa.'}</p>

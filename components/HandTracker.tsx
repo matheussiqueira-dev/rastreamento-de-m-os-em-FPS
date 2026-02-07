@@ -103,10 +103,15 @@ const HandTracker: React.FC<HandTrackerProps> = ({ onUpdate, onError, calibratio
 
     let animationFrameId: number;
     let isDisposed = false;
+    let pausedTickTimeout: number | null = null;
 
     const processFrame = async () => {
-      if (isDisposed || isPausedRef.current) {
-        animationFrameId = requestAnimationFrame(processFrame);
+      if (isDisposed) return;
+
+      if (isPausedRef.current) {
+        pausedTickTimeout = window.setTimeout(() => {
+          animationFrameId = requestAnimationFrame(processFrame);
+        }, 140);
         return;
       }
 
@@ -160,6 +165,7 @@ const HandTracker: React.FC<HandTrackerProps> = ({ onUpdate, onError, calibratio
     return () => {
       isDisposed = true;
       cancelAnimationFrame(animationFrameId);
+      if (pausedTickTimeout) window.clearTimeout(pausedTickTimeout);
       stableStateRef.current = null;
       candidateStateRef.current = null;
       candidateFramesRef.current = 0;
@@ -222,8 +228,8 @@ const HandTracker: React.FC<HandTrackerProps> = ({ onUpdate, onError, calibratio
   };
 
   return (
-    <div className="relative w-full h-full bg-black flex items-center justify-center">
-      <video ref={videoRef} className="hidden" playsInline muted />
+    <div className="tracker-root">
+      <video ref={videoRef} className="tracker-hidden-video" playsInline muted />
       {!cameraActive ? (
         <div className="tracker-loading">
           <div className="tracker-spinner" />

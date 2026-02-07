@@ -1,6 +1,7 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import CalibrationPanel from './components/CalibrationPanel';
 import HandTracker from './components/HandTracker';
+import HelpPanel from './components/HelpPanel';
 import HUD from './components/HUD';
 import {
   BASE_AMMO,
@@ -20,6 +21,7 @@ import {
   MovementGesture,
   TrackerCalibration,
 } from './types';
+import { usePersistentState } from './hooks/usePersistentState';
 
 const createBaseStats = (): MatchStats => ({
   shotsFired: 0,
@@ -153,17 +155,59 @@ const formatDuration = (milliseconds: number) => {
 const CinematicGenerator = React.lazy(() => import('./components/CinematicGenerator'));
 const GameContainer = React.lazy(() => import('./components/GameContainer'));
 
+const STORAGE_KEYS = {
+  difficulty: 'gesturestrike:settings:difficulty',
+  haptics: 'gesturestrike:settings:haptics',
+  reduceMotion: 'gesturestrike:settings:reduceMotion',
+  performanceMode: 'gesturestrike:settings:performanceMode',
+  calibration: 'gesturestrike:settings:calibration',
+} as const;
+
+const isDifficultyLevel = (value: unknown): value is DifficultyLevel =>
+  value === 'CASUAL' || value === 'TACTICAL' || value === 'INSANE';
+
+const isTrackerCalibration = (value: unknown): value is TrackerCalibration => {
+  if (!value || typeof value !== 'object') return false;
+  const calibration = value as Record<string, unknown>;
+  return (
+    typeof calibration.movementCenterX === 'number' &&
+    typeof calibration.movementCenterY === 'number' &&
+    typeof calibration.movementDeadzone === 'number' &&
+    typeof calibration.fistStopThreshold === 'number' &&
+    typeof calibration.indexExtendedThreshold === 'number' &&
+    typeof calibration.fireCurlThreshold === 'number' &&
+    typeof calibration.openHandThreshold === 'number' &&
+    typeof calibration.smoothingFrames === 'number'
+  );
+};
+
 const App: React.FC = () => {
-  const [selectedDifficulty, setSelectedDifficulty] = useState<DifficultyLevel>('TACTICAL');
+  const [selectedDifficulty, setSelectedDifficulty] = usePersistentState<DifficultyLevel>(
+    STORAGE_KEYS.difficulty,
+    'TACTICAL',
+    { validate: isDifficultyLevel },
+  );
   const [gameState, dispatch] = useReducer(gameReducer, createInitialState(selectedDifficulty));
   const [handState, setHandState] = useState<HandState>(DEFAULT_HAND_STATE);
-  const [trackerCalibration, setTrackerCalibration] = useState<TrackerCalibration>(DEFAULT_TRACKER_CALIBRATION);
+  const [trackerCalibration, setTrackerCalibration] = usePersistentState<TrackerCalibration>(
+    STORAGE_KEYS.calibration,
+    DEFAULT_TRACKER_CALIBRATION,
+    { validate: isTrackerCalibration },
+  );
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isCinematicOpen, setIsCinematicOpen] = useState(false);
   const [isCalibrationOpen, setIsCalibrationOpen] = useState(false);
-  const [hapticsEnabled, setHapticsEnabled] = useState(true);
-  const [reduceMotion, setReduceMotion] = useState<boolean>(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
+  const [hapticsEnabled, setHapticsEnabled] = usePersistentState<boolean>(STORAGE_KEYS.haptics, true);
+  const [reduceMotion, setReduceMotion] = usePersistentState<boolean>(
+    STORAGE_KEYS.reduceMotion,
+    typeof window !== 'undefined'
+      ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      : false,
+  );
+  const [performanceMode, setPerformanceMode] = usePersistentState<boolean>(STORAGE_KEYS.performanceMode, false);
   const [clockNow, setClockNow] = useState(Date.now());
+  const [isDamageFlashVisible, setIsDamageFlashVisible] = useState(false);
   const stepCycleRef = useRef(0);
   const reloadTimeoutRef = useRef<number | null>(null);
 
@@ -181,12 +225,14 @@ const App: React.FC = () => {
   const startMatch = useCallback(() => {
     dispatch({ type: 'START_MATCH', difficulty: selectedDifficulty, startedAt: Date.now() });
     setCameraError(null);
+    setIsHelpOpen(false);
   }, [selectedDifficulty]);
 
   const returnToMenu = useCallback(() => {
     dispatch({ type: 'RETURN_MENU', difficulty: selectedDifficulty });
     setIsCalibrationOpen(false);
     setIsCinematicOpen(false);
+    setIsHelpOpen(false);
     setHandState(DEFAULT_HAND_STATE);
   }, [selectedDifficulty]);
 
@@ -251,6 +297,14 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const keyHandler = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const isTypingContext =
+        target?.tagName === 'INPUT' ||
+        target?.tagName === 'TEXTAREA' ||
+        target?.tagName === 'SELECT' ||
+        target?.isContentEditable;
+      if (isTypingContext) return;
+
       if (event.key.toLowerCase() === 'p') {
         if (gameState.status === GameStatus.PLAYING) pauseMatch();
         else if (gameState.status === GameStatus.PAUSED) resumeMatch();
@@ -260,9 +314,14 @@ const App: React.FC = () => {
         setIsCalibrationOpen((previous) => !previous);
       }
 
+      if (event.key.toLowerCase() === 'h' || event.key === '?') {
+        setIsHelpOpen((previous) => !previous);
+      }
+
       if (event.key === 'Escape') {
         setIsCinematicOpen(false);
         setIsCalibrationOpen(false);
+        setIsHelpOpen(false);
       }
     };
     window.addEventListener('keydown', keyHandler);
@@ -295,13 +354,39 @@ const App: React.FC = () => {
   const isPaused = gameState.status === GameStatus.PAUSED;
   const isGameOver = gameState.status === GameStatus.GAMEOVER;
 
+  useEffect(() => {
+    if (!isPlaying || gameState.lastDamageTime === 0) return;
+    setIsDamageFlashVisible(true);
+    const timeout = window.setTimeout(() => setIsDamageFlashVisible(false), 260);
+    return () => window.clearTimeout(timeout);
+  }, [gameState.lastDamageTime, isPlaying]);
+
+  const accessibilityStatus = useMemo(() => {
+    if (cameraError) return `Erro de câmera: ${cameraError}`;
+    if (isMenu) return `Menu inicial ativo. Dificuldade selecionada: ${DIFFICULTY_PROFILES[selectedDifficulty].label}.`;
+    if (isPaused) return 'Partida pausada.';
+    if (isGameOver) return `Fim de partida. Pontuação ${gameState.score}.`;
+    if (isPlaying) {
+      return `Jogando. Onda ${gameState.wave}. Vida ${gameState.health} por cento. Munição ${gameState.ammo}.`;
+    }
+    return 'Aplicação em execução.';
+  }, [cameraError, gameState.ammo, gameState.health, gameState.score, gameState.wave, isGameOver, isMenu, isPaused, isPlaying, selectedDifficulty]);
+
   return (
     <main className="app-shell">
+      <a href="#mission-controls" className="skip-link">
+        Ir para controles da missão
+      </a>
+      <p className="sr-only" aria-live="polite">
+        {accessibilityStatus}
+      </p>
+
       <Suspense fallback={<div className="canvas-fallback" />}>
         <GameContainer
           handState={handState}
           gameState={gameState}
           isMotionReduced={reduceMotion}
+          isPerformanceMode={performanceMode}
           onShoot={handleShoot}
           onEnemyDefeated={handleEnemyDefeated}
           onTakeDamage={handleTakeDamage}
@@ -310,12 +395,25 @@ const App: React.FC = () => {
       </Suspense>
 
       {isPlaying || isPaused ? (
-        <div className="control-strip">
-          <button type="button" className="pill-btn" onClick={() => setIsCalibrationOpen((previous) => !previous)}>
+        <div className="control-strip" id="mission-controls">
+          <button
+            type="button"
+            className="pill-btn"
+            onClick={() => setIsCalibrationOpen((previous) => !previous)}
+            aria-pressed={isCalibrationOpen}
+          >
             Calibração
           </button>
           <button type="button" className="pill-btn" onClick={() => setIsCinematicOpen(true)}>
             Cinemática
+          </button>
+          <button
+            type="button"
+            className="pill-btn"
+            onClick={() => setIsHelpOpen((previous) => !previous)}
+            aria-pressed={isHelpOpen}
+          >
+            Ajuda
           </button>
           <button type="button" className="pill-btn" onClick={isPaused ? resumeMatch : pauseMatch}>
             {isPaused ? 'Retomar' : 'Pausar'}
@@ -323,7 +421,7 @@ const App: React.FC = () => {
         </div>
       ) : null}
 
-      <aside className="tracker-dock">
+      <aside className="tracker-dock" aria-label="Pré-visualização do rastreamento das mãos">
         <HandTracker
           onUpdate={setHandState}
           onError={setCameraError}
@@ -336,7 +434,7 @@ const App: React.FC = () => {
         <HUD gameState={gameState} handState={handState} sessionDurationMs={sessionDurationMs} />
       ) : null}
 
-      {isPlaying && Date.now() - gameState.lastDamageTime < 280 ? <div className="damage-flash" /> : null}
+      {isPlaying && isDamageFlashVisible ? <div className="damage-flash" /> : null}
 
       {isCalibrationOpen ? (
         <CalibrationPanel
@@ -346,6 +444,8 @@ const App: React.FC = () => {
           onClose={() => setIsCalibrationOpen(false)}
         />
       ) : null}
+
+      {isHelpOpen ? <HelpPanel onClose={() => setIsHelpOpen(false)} /> : null}
 
       {isCinematicOpen ? (
         <Suspense
@@ -363,10 +463,10 @@ const App: React.FC = () => {
       ) : null}
 
       {cameraError ? (
-        <section className="overlay-root" role="alertdialog" aria-modal="true">
+        <section className="overlay-root" role="alertdialog" aria-modal="true" aria-labelledby="camera-error-title">
           <div className="overlay-card compact">
             <p>Falha de câmera</p>
-            <h2>Não foi possível iniciar o rastreamento.</h2>
+            <h2 id="camera-error-title">Não foi possível iniciar o rastreamento.</h2>
             <p>{cameraError}</p>
             <button type="button" className="primary-btn" onClick={() => window.location.reload()}>
               Recarregar aplicação
@@ -376,10 +476,10 @@ const App: React.FC = () => {
       ) : null}
 
       {isMenu ? (
-        <section className="overlay-root" role="dialog" aria-modal="true">
+        <section className="overlay-root" role="dialog" aria-modal="true" aria-labelledby="menu-title">
           <div className="overlay-card menu-card">
             <p>GestureStrike Neural Arena</p>
-            <h1>Controle FPS por Gestos</h1>
+            <h1 id="menu-title">Controle FPS por Gestos</h1>
             <p>
               Mão esquerda para deslocamento, mão direita para combate. Ajuste dificuldade e preferências antes de
               iniciar.
@@ -408,6 +508,7 @@ const App: React.FC = () => {
                   type="checkbox"
                   checked={hapticsEnabled}
                   onChange={(event) => setHapticsEnabled(event.target.checked)}
+                  aria-label="Ativar feedback háptico"
                 />
                 Haptics habilitado
               </label>
@@ -416,8 +517,18 @@ const App: React.FC = () => {
                   type="checkbox"
                   checked={reduceMotion}
                   onChange={(event) => setReduceMotion(event.target.checked)}
+                  aria-label="Reduzir animações"
                 />
                 Reduzir animações
+              </label>
+              <label className="toggle-item">
+                <input
+                  type="checkbox"
+                  checked={performanceMode}
+                  onChange={(event) => setPerformanceMode(event.target.checked)}
+                  aria-label="Ativar modo performance"
+                />
+                Modo performance
               </label>
             </div>
 
@@ -429,10 +540,10 @@ const App: React.FC = () => {
       ) : null}
 
       {isPaused ? (
-        <section className="overlay-root" role="dialog" aria-modal="true">
+        <section className="overlay-root" role="dialog" aria-modal="true" aria-labelledby="paused-title">
           <div className="overlay-card compact">
             <p>Sessão pausada</p>
-            <h2>Telemetria congelada</h2>
+            <h2 id="paused-title">Telemetria congelada</h2>
             <p>Tempo {formatDuration(sessionDurationMs)} • Precisão {matchAccuracy.toFixed(1)}%</p>
             <div className="button-row">
               <button type="button" className="primary-btn" onClick={resumeMatch}>
@@ -447,10 +558,10 @@ const App: React.FC = () => {
       ) : null}
 
       {isGameOver ? (
-        <section className="overlay-root" role="dialog" aria-modal="true">
+        <section className="overlay-root" role="dialog" aria-modal="true" aria-labelledby="results-title">
           <div className="overlay-card compact results-card">
             <p>Fim de partida</p>
-            <h2>Operador neutralizado</h2>
+            <h2 id="results-title">Operador neutralizado</h2>
             <div className="result-grid">
               <div>
                 <span>Pontuação</span>

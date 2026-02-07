@@ -17,6 +17,7 @@ interface GameContainerProps {
   handState: HandState;
   gameState: GameState;
   isMotionReduced: boolean;
+  isPerformanceMode: boolean;
   onShoot: (didHit: boolean) => void;
   onEnemyDefeated: (points: number) => void;
   onTakeDamage: (amount: number) => void;
@@ -191,6 +192,7 @@ const GameLogic: React.FC<GameContainerProps> = ({
   onTakeDamage,
   onWaveChange,
   isMotionReduced,
+  isPerformanceMode,
 }) => {
   const { camera, raycaster, scene } = useThree();
   const enemiesRef = useRef<Target[]>([]);
@@ -373,12 +375,22 @@ const GameLogic: React.FC<GameContainerProps> = ({
       ))}
 
       <Sky sunPosition={[100, 18, 100]} />
-      <Stars radius={140} depth={42} count={isMotionReduced ? 2600 : 4200} factor={4} saturation={0} fade speed={1.3} />
+      <Stars
+        radius={140}
+        depth={42}
+        count={isPerformanceMode ? 1200 : isMotionReduced ? 2600 : 4200}
+        factor={isPerformanceMode ? 2.3 : 4}
+        saturation={0}
+        fade
+        speed={isPerformanceMode ? 0.8 : 1.3}
+      />
       <Environment preset="night" />
 
-      <ambientLight intensity={0.42} />
-      <pointLight position={[8, 9, 6]} intensity={1.4} color="#82a7ff" />
-      <spotLight position={[-14, 26, -10]} intensity={1} color="#7ce8ff" angle={0.6} penumbra={0.5} />
+      <ambientLight intensity={isPerformanceMode ? 0.5 : 0.42} />
+      <pointLight position={[8, 9, 6]} intensity={isPerformanceMode ? 1.1 : 1.4} color="#82a7ff" />
+      {!isPerformanceMode ? (
+        <spotLight position={[-14, 26, -10]} intensity={1} color="#7ce8ff" angle={0.6} penumbra={0.5} />
+      ) : null}
 
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow>
         <planeGeometry args={[320, 320]} />
@@ -403,7 +415,7 @@ const GameContainer: React.FC<GameContainerProps> = (props) => {
 
   return (
     <div className="game-canvas-shell" aria-label="Cena 3D do jogo">
-      <Canvas shadows dpr={[1, 1.8]}>
+      <Canvas shadows={!props.isPerformanceMode} dpr={props.isPerformanceMode ? [1, 1.2] : [1, 1.8]}>
         <Suspense fallback={null}>
           <GameLogic {...props} />
         </Suspense>

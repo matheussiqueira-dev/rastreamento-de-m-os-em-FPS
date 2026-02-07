@@ -1,88 +1,136 @@
-# GestureStrike FPS
+# GestureStrike FPS Frontend
 
-Protótipo de FPS em navegador controlado por gestos de mão com visão computacional em tempo real.
+Aplicação frontend de um FPS web controlado por gestos manuais, com renderização 3D em tempo real, painel tático e experiência orientada a usabilidade.
 
-## Visão Geral do Projeto
+## Visão Geral do Frontend
 
-O projeto transforma movimentos manuais capturados por webcam em comandos de jogo para um ambiente 3D em primeira pessoa.  
-O objetivo é validar uma experiência de gameplay hands-free com foco em:
+Este projeto entrega uma experiência de gameplay no navegador em que:
 
-- baixa fricção de interação
-- resposta visual/tátil imediata
-- arquitetura preparada para evolução de produto
+- a webcam captura landmarks das mãos com MediaPipe
+- os gestos são convertidos em comandos de movimentação/combate
+- o motor 3D exibe a cena FPS com HUD em tempo real
+- o usuário pode calibrar o rastreamento e ajustar preferências de UX/performance
 
-Público-alvo principal:
+Público-alvo:
 
-- estúdios e squads de P&D em interfaces naturais
-- desenvolvedores de jogos web com interesse em visão computacional
-- criadores de experiências imersivas sem periféricos tradicionais
+- usuários finais que querem interação hands-free
+- times de produto/engenharia explorando interfaces naturais
+- desenvolvedores frontend/game web interessados em visão computacional aplicada
 
-## Tecnologias Utilizadas
+## Stack e Tecnologias
 
-- React 19 + TypeScript
-- Vite 7
-- Three.js + React Three Fiber + Drei
-- MediaPipe Hands (via CDN)
-- Gemini/Google GenAI (`@google/genai`) para geração cinematográfica opcional
-- CSS customizado com design tokens (sem dependência de Tailwind runtime)
+- `React 19`
+- `TypeScript`
+- `Vite 7`
+- `Three.js`
+- `@react-three/fiber`
+- `@react-three/drei`
+- `@google/genai` (módulo opcional de geração cinematográfica)
+- `MediaPipe Hands` (via CDN)
+- CSS customizado com tokens de design (`styles.css`)
 
-## Funcionalidades Principais
+## Análise Técnica Aplicada
 
-- Controle por gestos com duas mãos (movimento + combate)
-- IA inimiga com estados `PATROLLING`, `ALERT`, `ATTACKING`
-- HUD tático com telemetria de sessão em tempo real
-- Dificuldades configuráveis (`Casual`, `Tactical`, `Insane`)
-- Pausa de partida e resumo pós-jogo
-- Calibração de rastreamento com sliders em tempo real
-- Feedback háptico (quando suportado pelo navegador/dispositivo)
-- Gerador de sequência cinematográfica por imagem + prompt
+Durante a revisão frontend, os principais pontos endereçados foram:
 
-## Melhorias Implementadas (Refactor v2)
+- simplificação do fluxo de estado com reducer previsível
+- redução de acoplamento entre UI e regras de gameplay
+- remoção de código duplicado/morto (`VeoAnimator`)
+- melhora de renderização com split de chunks e lazy loading
+- reforço de acessibilidade semântica e navegação por teclado
+- melhorias de SEO técnico no `index.html`
 
-### Arquitetura e Código
+## Otimizações e Refactor
 
-- Estado de jogo reestruturado com reducer previsível
-- Separação de configuração em `config/gameConfig.ts`
-- Tipagem ampliada para dificuldade, estatísticas e calibração
-- Remoção de código duplicado e componentes redundantes
-- Eliminação de acoplamento frágil com `process.env` no client
+### Arquitetura
 
-### Performance e Escalabilidade
+- Estado centralizado em `App.tsx` com ações explícitas.
+- Configurações de gameplay extraídas para `config/gameConfig.ts`.
+- Tipagem de domínio expandida em `types.ts`.
 
-- Redução de re-render do loop 3D com sincronização periódica de inimigos
-- Lazy loading de módulos pesados (`GameContainer`, `CinematicGenerator`)
-- Split de chunks por domínio (`vendor-three`, `vendor-genai`)
-- Melhoria na estabilidade de detecção com suavização configurável
+### Performance
 
-### Segurança e Robustez
+- `React.lazy` para `GameContainer` e `CinematicGenerator`.
+- Manual chunks no Vite (`vendor-three`, `vendor-genai`).
+- Modo Performance para reduzir custo de render em dispositivos limitados.
+- Loop de tracker pausado com baixa frequência quando o jogo não está ativo.
 
-- Fluxo de API Key da geração cinematográfica tratado explicitamente
-- Download de vídeo via `blob` (reduz exposição direta de URL com chave)
-- Tratamento de erros de câmera e fallback de runtime
+### Acessibilidade e UX
 
-### UI/UX
+- `aria` em diálogos e regiões críticas.
+- `skip link` para navegação rápida por teclado.
+- foco visível padronizado (`:focus-visible`).
+- `aria-live` para status operacional.
+- painel de ajuda com gestos + atalhos (`H`, `?`, `P`, `C`, `Esc`).
+- persistência de preferências (dificuldade, haptics, redução de movimento, performance, calibração).
 
-- Redesign completo de menu, overlays, HUD e controles
-- Hierarquia visual clara com tipografia e tokens visuais consistentes
-- Melhor responsividade para desktop/mobile
-- Opção de redução de movimento para conforto/acessibilidade
+### SEO Técnico
 
-## Instalação e Uso
+- `meta description`, `robots`, `theme-color`
+- metatags Open Graph/Twitter
+- `noscript` de fallback
+
+## Novas Funcionalidades Implementadas
+
+1. Persistência de preferências no `localStorage`
+- melhora continuidade da experiência entre sessões
+- reduz fricção de reconfiguração
+
+2. Painel de ajuda contextual
+- reduz curva de aprendizado dos gestos e atalhos
+- aumenta usabilidade em sessões curtas
+
+3. Modo Performance
+- reduz carga visual/GPU mantendo jogabilidade
+- melhora experiência em notebooks e máquinas mais simples
+
+## Estrutura do Projeto
+
+```txt
+.
+├── App.tsx
+├── index.tsx
+├── index.html
+├── styles.css
+├── types.ts
+├── global.d.ts
+├── hooks/
+│   └── usePersistentState.ts
+├── config/
+│   └── gameConfig.ts
+├── components/
+│   ├── CalibrationPanel.tsx
+│   ├── CinematicGenerator.tsx
+│   ├── GameContainer.tsx
+│   ├── HandTracker.tsx
+│   ├── HelpPanel.tsx
+│   └── HUD.tsx
+├── vite.config.ts
+├── tsconfig.json
+└── package.json
+```
+
+## Setup e Execução
 
 ## Pré-requisitos
 
-- Node.js 20+ (recomendado)
-- Webcam disponível e permissão concedida no navegador
-- Navegador com suporte WebGL
+- `Node.js` 20+
+- webcam habilitada
+- navegador com WebGL
 
-## Passos
+## Instalação
 
 ```bash
 npm install
+```
+
+## Ambiente de desenvolvimento
+
+```bash
 npm run dev
 ```
 
-Aplicação disponível em `http://localhost:3000`.
+Aplicação em `http://localhost:3000`.
 
 ## Build de produção
 
@@ -91,62 +139,30 @@ npm run build
 npm run preview
 ```
 
-## Variáveis de ambiente (opcional)
-
-Crie um arquivo `.env` (raiz do projeto):
+## Variável opcional
 
 ```env
-VITE_GEMINI_API_KEY=sua_chave_gemini
+VITE_GEMINI_API_KEY=sua_chave
 ```
 
-Se não definir no `.env`, você pode informar a chave diretamente no modal de geração cinematográfica.
+Se não informar no `.env`, a chave pode ser inserida no modal cinematográfico.
 
-## Estrutura do Projeto
+## Boas Práticas Adotadas
 
-```text
-.
-├── App.tsx
-├── index.tsx
-├── styles.css
-├── types.ts
-├── global.d.ts
-├── config/
-│   └── gameConfig.ts
-├── components/
-│   ├── CalibrationPanel.tsx
-│   ├── CinematicGenerator.tsx
-│   ├── GameContainer.tsx
-│   ├── HUD.tsx
-│   └── HandTracker.tsx
-├── index.html
-├── vite.config.ts
-├── tsconfig.json
-└── package.json
-```
+- componentização orientada a responsabilidade
+- tokenização visual para consistência do design system
+- tratamento de erro de câmera e fallback de módulos
+- controle de estado previsível e tipado
+- UI responsiva com comportamento mobile/desktop
+- foco em acessibilidade e teclado
 
-## Fluxo Principal de Jogo
+## Melhorias Futuras
 
-1. Usuário define dificuldade e preferências no menu inicial.
-2. Tracker ativa webcam e traduz landmarks em gestos.
-3. Motor 3D consome gestos para movimento, tiro e recarga.
-4. HUD apresenta métricas críticas (saúde, munição, precisão, onda).
-5. Ao final, tela de resultados exibe desempenho consolidado.
-
-## Boas Práticas Aplicadas
-
-- Estado centralizado e imutável em pontos críticos
-- Tipagem forte para evitar regressões comportamentais
-- Lazy loading para diminuir custo de carregamento inicial
-- CSS orientado a tokens para consistência visual
-- Separação clara entre domínio (estado/config) e apresentação (UI)
-
-## Possíveis Melhorias Futuras
-
-- Matchmaking/co-op e placar online
-- Persistência de perfil e calibração por usuário
-- Replay com timeline de eventos por frame
-- Integração com backend para geração cinematográfica server-side
-- Testes automatizados (unit + e2e) para fluxos críticos
+- testes automatizados (unitários + e2e)
+- persistência de histórico de partidas (leaderboard local/remoto)
+- internacionalização (`pt-BR` / `en`)
+- observabilidade frontend (Sentry + Web Vitals)
+- backend para geração cinematográfica sem chave exposta no client
 
 ---
 
